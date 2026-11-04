@@ -1,4 +1,4 @@
-import { Timestamp } from 'firebase/firestore';
+import type { Timestamp } from 'firebase/firestore';
 
 export type AccountType = 'individual' | 'contractor' | 'institution';
 export type DeliveryMethod = 'pickup' | 'local_siaya' | 'regional_nyanza' | 'countrywide_freight';

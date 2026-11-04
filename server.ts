@@ -1,19 +1,19 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import express, { NextFunction, Request, Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { initializeApp } from 'firebase/app';
 import {
   collection,
-  CollectionReference,
+  type CollectionReference,
   doc,
-  DocumentReference,
+  type DocumentReference,
   getDoc,
   getDocs,
   getFirestore,
   query,
-  QueryConstraint,
+  type QueryConstraint,
   serverTimestamp,
   where,
   writeBatch,
@@ -24,8 +24,8 @@ import {
   INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
   INITIAL_PROMOTIONS,
-} from './src/data/seedCatalog';
-import { normalizeKenyanPhone } from './src/utils/whatsapp';
+} from './src/data/seedCatalog.ts';
+import { normalizeKenyanPhone } from './src/utils/whatsapp.ts';
 
 const firebaseConfig = JSON.parse(
   fs.readFileSync(path.resolve(process.cwd(), 'firebase-applet-config.json'), 'utf-8')

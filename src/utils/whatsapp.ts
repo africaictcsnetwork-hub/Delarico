@@ -1,4 +1,4 @@
-import { CartItem, Order, Product, QuoteDraftItem } from '../types';
+import type { CartItem, Order, Product, QuoteDraftItem } from '../types.ts';
 
 export const DEFAULT_WHATSAPP_NUMBER = '+254 706 824489';
 

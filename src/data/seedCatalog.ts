@@ -1,5 +1,5 @@
-import { Branch, Category, Product, Promotion, StoreSettings } from '../types';
-import { createProductGallery } from '../utils/productVisuals';
+import type { Branch, Category, Product, Promotion, StoreSettings } from '../types.ts';
+import { createProductGallery } from '../utils/productVisuals.ts';
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   businessName: 'DELARICO MERCHANDISE & SUPPLIES',
