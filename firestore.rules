@@ -223,9 +223,10 @@ service cloud.firestore {
           'accountType', 'branchId', 'deliveryCounty', 'deliveryTown', 'deliveryAddress',
           'deliveryMethod', 'subtotalKes', 'discountKes', 'promoCode', 'deliveryFeeKes',
           'totalKes', 'itemCount', 'paymentMethod', 'paymentReference', 'paymentStatus',
-          'orderStatus', 'notes', 'vaultKey', 'createdAt', 'updatedAt'
+          'orderStatus', 'notes', 'affiliateCode', 'vaultKey', 'createdAt', 'updatedAt'
         ]) &&
         hasValidOptionalVaultKey(data) &&
+        (!('affiliateCode' in data) || (data.affiliateCode is string && data.affiliateCode.size() <= 32)) &&
         data.orderNumber is string && data.orderNumber.size() >= 4 && data.orderNumber.size() <= 40 && data.orderNumber.matches('^[A-Z0-9\\-]+$') &&
         isValidId(data.customerId) &&
         data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120 &&
@@ -428,6 +429,63 @@ service cloud.firestore {
         data.freeDeliveryThresholdKes is number && data.freeDeliveryThresholdKes >= 0 &&
         data.loyaltyPointsPer1000Kes is number && data.loyaltyPointsPer1000Kes >= 0 &&
         data.isPublic is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAffiliateProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'affiliateCode', 'displayName', 'mpesaPhone', 'commissionRatePct',
+          'totalClicks', 'totalReferrals', 'totalSalesKes', 'pendingCommissionKes',
+          'availableCommissionKes', 'paidCommissionKes', 'payoutRequested', 'status',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'affiliateCode', 'displayName', 'mpesaPhone', 'commissionRatePct',
+          'totalClicks', 'totalReferrals', 'totalSalesKes', 'pendingCommissionKes',
+          'availableCommissionKes', 'paidCommissionKes', 'payoutRequested', 'status',
+          'vaultKey', 'createdAt', 'updatedAt'
+        ]) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.uid) &&
+        data.affiliateCode is string && data.affiliateCode.size() >= 4 && data.affiliateCode.size() <= 24 && data.affiliateCode.matches('^[A-Z0-9\\-]+$') &&
+        data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120 &&
+        data.mpesaPhone is string && data.mpesaPhone.size() >= 7 && data.mpesaPhone.size() <= 30 &&
+        data.commissionRatePct is number && data.commissionRatePct >= 3 && data.commissionRatePct <= 5 &&
+        data.totalClicks is number && data.totalClicks >= 0 &&
+        data.totalReferrals is number && data.totalReferrals >= 0 &&
+        data.totalSalesKes is number && data.totalSalesKes >= 0 &&
+        data.pendingCommissionKes is number && data.pendingCommissionKes >= 0 &&
+        data.availableCommissionKes is number && data.availableCommissionKes >= 0 &&
+        data.paidCommissionKes is number && data.paidCommissionKes >= 0 &&
+        data.payoutRequested is bool &&
+        data.status is string && data.status in ['active', 'suspended'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAffiliateReferral(data) {
+      return data.keys().hasAll([
+          'affiliateUid', 'affiliateCode', 'affiliateName', 'orderId', 'orderNumber',
+          'buyerFirstName', 'orderTotalKes', 'commissionRatePct', 'commissionKes',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'affiliateUid', 'affiliateCode', 'affiliateName', 'orderId', 'orderNumber',
+          'buyerFirstName', 'orderTotalKes', 'commissionRatePct', 'commissionKes',
+          'status', 'vaultKey', 'createdAt', 'updatedAt'
+        ]) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.affiliateUid) &&
+        data.affiliateCode is string && data.affiliateCode.size() >= 4 && data.affiliateCode.size() <= 24 && data.affiliateCode.matches('^[A-Z0-9\\-]+$') &&
+        data.affiliateName is string && data.affiliateName.size() >= 2 && data.affiliateName.size() <= 120 &&
+        isValidId(data.orderId) &&
+        data.orderNumber is string && data.orderNumber.size() >= 4 && data.orderNumber.size() <= 40 && data.orderNumber.matches('^[A-Z0-9\\-]+$') &&
+        data.buyerFirstName is string && data.buyerFirstName.size() >= 1 && data.buyerFirstName.size() <= 60 &&
+        data.orderTotalKes is number && data.orderTotalKes >= 0 &&
+        data.commissionRatePct is number && data.commissionRatePct >= 3 && data.commissionRatePct <= 5 &&
+        data.commissionKes is number && data.commissionKes >= 0 &&
+        data.status is string && data.status in ['pending', 'approved', 'paid', 'cancelled'] &&
+        data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
@@ -874,6 +932,85 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         (hasServerWriteGate('set_' + settingId) || (isVerifiedUser() && isAdmin()));
       allow delete: if isValidId(settingId) && (hasServerWriteGate('set_' + settingId) || isAdmin());
+    }
+
+    match /affiliates/{affiliateId} {
+      allow get: if isSignedIn() && isValidId(affiliateId) && !('vaultKey' in existing()) &&
+        (request.auth.uid == affiliateId || isAdmin());
+      allow list: if (isSignedIn() && !('vaultKey' in existing()) && (existing().uid == request.auth.uid || isBootstrappedAdmin())) ||
+        hasServerVaultRead();
+      allow create: if isValidId(affiliateId) && isValidAffiliateProfile(incoming()) &&
+        incoming().uid == affiliateId &&
+        incoming().totalClicks == 0 &&
+        incoming().totalReferrals == 0 &&
+        incoming().totalSalesKes == 0 &&
+        incoming().pendingCommissionKes == 0 &&
+        incoming().availableCommissionKes == 0 &&
+        incoming().paidCommissionKes == 0 &&
+        incoming().payoutRequested == false &&
+        incoming().status == 'active' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          exists(/databases/$(database)/documents/users/$(affiliateId)) ||
+          existsAfter(/databases/$(database)/documents/users/$(affiliateId))
+        ) && (
+          hasServerWriteGate('aff_' + affiliateId) ||
+          (isVerifiedUser() && !('vaultKey' in incoming()) && request.auth.uid == affiliateId)
+        );
+      allow update: if isValidId(affiliateId) && isValidAffiliateProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().affiliateCode == existing().affiliateCode &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          hasServerWriteGate('aff_' + affiliateId) ||
+          (
+            isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && (
+              isAdmin() ||
+              (
+                request.auth.uid == affiliateId &&
+                existing().status == 'active' &&
+                incoming().status == existing().status &&
+                incoming().commissionRatePct == existing().commissionRatePct &&
+                incoming().totalClicks == existing().totalClicks &&
+                incoming().totalReferrals == existing().totalReferrals &&
+                incoming().totalSalesKes == existing().totalSalesKes &&
+                incoming().pendingCommissionKes == existing().pendingCommissionKes &&
+                incoming().availableCommissionKes == existing().availableCommissionKes &&
+                incoming().paidCommissionKes == existing().paidCommissionKes &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['mpesaPhone', 'payoutRequested', 'updatedAt'])
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(affiliateId) && (hasServerWriteGate('aff_' + affiliateId) || (isAdmin() && !('vaultKey' in existing())));
+    }
+
+    match /affiliateReferrals/{referralId} {
+      allow get: if isSignedIn() && isValidId(referralId) && !('vaultKey' in existing()) &&
+        (existing().affiliateUid == request.auth.uid || isAdmin());
+      allow list: if (isSignedIn() && !('vaultKey' in existing()) && (existing().affiliateUid == request.auth.uid || isBootstrappedAdmin())) ||
+        hasServerVaultRead();
+      allow create: if isValidId(referralId) && isValidAffiliateReferral(incoming()) &&
+        incoming().status == 'pending' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/affiliates/$(incoming().affiliateUid)) &&
+        exists(/databases/$(database)/documents/orders/$(incoming().orderId)) &&
+        hasServerWriteGate('affref_' + referralId);
+      allow update: if isValidId(referralId) && isValidAffiliateReferral(incoming()) &&
+        incoming().affiliateUid == existing().affiliateUid &&
+        incoming().affiliateCode == existing().affiliateCode &&
+        incoming().orderId == existing().orderId &&
+        incoming().orderNumber == existing().orderNumber &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        existing().status != 'paid' &&
+        existing().status != 'cancelled' && (
+          hasServerWriteGate('affref_' + referralId) ||
+          (isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && isAdmin())
+        );
+      allow delete: if isValidId(referralId) && (hasServerWriteGate('affref_' + referralId) || (isAdmin() && !('vaultKey' in existing())));
     }
   }
 }

@@ -11,6 +11,7 @@ import {
   ShoppingBag,
   Star,
   Truck,
+  Zap,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { buildProductEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
@@ -272,15 +273,29 @@ export const ProductDetailPage: React.FC = () => {
 
           {/* Primary Purchase, Quotation & WhatsApp Actions */}
           <div className="space-y-2.5">
-            <button
-              type="button"
-              onClick={() => addToCart(product, quantity)}
-              disabled={product.stockQty <= 0}
-              className="w-full inline-flex items-center justify-center gap-2 py-3 px-5 text-sm font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 disabled:bg-slate-300 transition-colors tabular-nums"
-            >
-              <ShoppingBag className="w-4 h-4" />
-              <span>Add to Cart — {formatKes(lineTotal)}</span>
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  addToCart(product, quantity);
+                  navigate('/checkout');
+                }}
+                disabled={product.stockQty <= 0}
+                className="w-full inline-flex items-center justify-center gap-2 py-3 px-4 text-sm font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 disabled:bg-slate-300 transition-colors tabular-nums"
+              >
+                <Zap className="w-4 h-4" />
+                <span>Buy Now — {formatKes(lineTotal)}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => addToCart(product, quantity)}
+                disabled={product.stockQty <= 0}
+                className="w-full inline-flex items-center justify-center gap-2 py-3 px-4 text-sm font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 disabled:bg-slate-300 transition-colors"
+              >
+                <ShoppingBag className="w-4 h-4" />
+                <span>Add to Cart</span>
+              </button>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button

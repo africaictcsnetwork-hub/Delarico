@@ -179,6 +179,7 @@
         "paymentStatus": { "type": "string", "enum": ["pending_verification", "verified_paid", "failed", "refunded"] },
         "orderStatus": { "type": "string", "enum": ["pending", "confirmed", "processing", "dispatched", "delivered", "cancelled"] },
         "notes": { "type": "string", "maxLength": 1000 },
+        "affiliateCode": { "type": "string", "maxLength": 32 },
         "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -386,6 +387,60 @@
         "bankName", "bankAccountName", "bankAccountNumber", "bankBranch",
         "codEnabled", "freeDeliveryThresholdKes", "loyaltyPointsPer1000Kes", "isPublic", "updatedAt"
       ]
+    },
+    "AffiliateProfile": {
+      "title": "AffiliateProfile",
+      "description": "Registered affiliate partner account earning 3-5% sales commissions.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "affiliateCode": { "type": "string", "minLength": 4, "maxLength": 24, "pattern": "^[A-Z0-9\\-]+$" },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "mpesaPhone": { "type": "string", "minLength": 7, "maxLength": 30 },
+        "commissionRatePct": { "type": "number" },
+        "totalClicks": { "type": "number" },
+        "totalReferrals": { "type": "number" },
+        "totalSalesKes": { "type": "number" },
+        "pendingCommissionKes": { "type": "number" },
+        "availableCommissionKes": { "type": "number" },
+        "paidCommissionKes": { "type": "number" },
+        "payoutRequested": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "affiliateCode", "displayName", "mpesaPhone", "commissionRatePct",
+        "totalClicks", "totalReferrals", "totalSalesKes", "pendingCommissionKes",
+        "availableCommissionKes", "paidCommissionKes", "payoutRequested", "status",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "AffiliateReferral": {
+      "title": "AffiliateReferral",
+      "description": "Tracked affiliate sale referral and 3-5% commission ledger entry.",
+      "type": "object",
+      "properties": {
+        "affiliateUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "affiliateCode": { "type": "string", "minLength": 4, "maxLength": 24, "pattern": "^[A-Z0-9\\-]+$" },
+        "affiliateName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderNumber": { "type": "string", "minLength": 4, "maxLength": 40, "pattern": "^[A-Z0-9\\-]+$" },
+        "buyerFirstName": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "orderTotalKes": { "type": "number" },
+        "commissionRatePct": { "type": "number" },
+        "commissionKes": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "paid", "cancelled"] },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "affiliateUid", "affiliateCode", "affiliateName", "orderId", "orderNumber",
+        "buyerFirstName", "orderTotalKes", "commissionRatePct", "commissionKes",
+        "status", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -460,6 +515,14 @@
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/StoreSettings" },
       "description": "Public corporate configuration and payment instructions."
+    },
+    "/affiliates/{affiliateId}": {
+      "schema": { "$ref": "#/entities/AffiliateProfile" },
+      "description": "Registered affiliate partner accounts and earnings."
+    },
+    "/affiliateReferrals/{referralId}": {
+      "schema": { "$ref": "#/entities/AffiliateReferral" },
+      "description": "Tracked affiliate order referrals and 3-5% commissions."
     }
   }
 }

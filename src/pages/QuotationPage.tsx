@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, FileText, MessageCircle, Plus, Trash2 } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, FileText, MessageCircle, Plus, Trash2, UserCheck } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { buildQuotationWhatsAppMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
 
@@ -17,6 +17,8 @@ export const QuotationPage: React.FC = () => {
     updateQuoteDraftQty,
     removeFromQuoteDraft,
     clearQuoteDraft,
+    loginWithPhone,
+    registerWithPhone,
     apiFetch,
     notify,
   } = useStore();
@@ -28,6 +30,9 @@ export const QuotationPage: React.FC = () => {
   const [companyName, setCompanyName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [guestAuthMode, setGuestAuthMode] = useState<'register' | 'login'>('register');
+  const [guestPassword, setGuestPassword] = useState('');
+  const [showGuestPwd, setShowGuestPwd] = useState(false);
   const [projectType, setProjectType] = useState('Residential Construction');
   const [deliveryLocation, setDeliveryLocation] = useState('');
   const [instructions, setInstructions] = useState('');
@@ -82,13 +87,38 @@ export const QuotationPage: React.FC = () => {
       notify('Please add at least one building material to your quotation schedule.', 'error');
       return;
     }
-    if (!user) {
-      navigate('/account?redirect=%2Frequest-quote');
-      return;
-    }
 
     setSubmitting(true);
     try {
+      let activeUser = user;
+      if (!activeUser) {
+        if (!guestPassword || guestPassword.length < 4) {
+          notify('Please choose a quick 4+ character password or PIN to view our priced response online.', 'error');
+          setSubmitting(false);
+          return;
+        }
+        if (guestAuthMode === 'login') {
+          activeUser = await loginWithPhone(phone.trim(), guestPassword);
+        } else {
+          activeUser = await registerWithPhone({
+            displayName: contactName.trim() || 'Client',
+            phone: phone.trim(),
+            password: guestPassword,
+            email: email.trim() || undefined,
+            accountType: companyName.trim() ? 'contractor' : 'individual',
+            companyName: companyName.trim(),
+          });
+        }
+        if (!activeUser) {
+          setSubmitting(false);
+          return;
+        }
+        if (activeUser.isAdmin) {
+          navigate('/portal/workspace', { replace: true });
+          return;
+        }
+      }
+
       const itemsPayload = quoteDraft.map(({ product, quantity }) => ({
         productId: product.id,
         productName: product.name,
@@ -100,10 +130,10 @@ export const QuotationPage: React.FC = () => {
       const res = await apiFetch<{ quoteNumber: string; id: string }>('/api/customer/quotations', {
         method: 'POST',
         body: JSON.stringify({
-          contactName: contactName.trim() || user.displayName || 'Client',
+          contactName: contactName.trim() || activeUser.displayName || 'Client',
           companyName: companyName.trim(),
           phone: phone.trim(),
-          email: email.trim() || user.email || 'client@delarico.co.ke',
+          email: email.trim() || activeUser.email || 'client@delarico.co.ke',
           deliveryLocation: deliveryLocation.trim(),
           projectType: projectType.trim(),
           instructions: instructions.trim(),
@@ -375,6 +405,51 @@ export const QuotationPage: React.FC = () => {
             />
           </div>
 
+          {!user && (
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy-900">
+                  <UserCheck className="w-3.5 h-3.5 text-royal-700" />
+                  <span>
+                    {guestAuthMode === 'register'
+                      ? 'Set a quick PIN/Password to receive priced quote'
+                      : 'Sign in with your account password'}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setGuestAuthMode((m) => (m === 'register' ? 'login' : 'register'))}
+                  className="text-[11px] font-semibold text-royal-700 hover:underline whitespace-nowrap"
+                >
+                  {guestAuthMode === 'register' ? 'Have an account?' : 'New customer?'}
+                </button>
+              </div>
+              <div className="relative">
+                <input
+                  type={showGuestPwd ? 'text' : 'password'}
+                  required
+                  minLength={4}
+                  value={guestPassword}
+                  onChange={(e) => setGuestPassword(e.target.value)}
+                  placeholder={
+                    guestAuthMode === 'register'
+                      ? 'At least 4 characters (e.g. 4-digit PIN)'
+                      : 'Enter your password'
+                  }
+                  className="w-full pl-3 pr-9 py-2 text-xs bg-white border border-slate-200 rounded-lg"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowGuestPwd((v) => !v)}
+                  aria-label={showGuestPwd ? 'Hide password' : 'Show password'}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                >
+                  {showGuestPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2.5 pt-2">
             <button
               type="submit"
@@ -383,11 +458,7 @@ export const QuotationPage: React.FC = () => {
             >
               <FileText className="w-4 h-4" />
               <span>
-                {user
-                  ? submitting
-                    ? 'Submitting Official Quote...'
-                    : 'Submit Digital Quotation Request'
-                  : 'Sign In & Submit Digital Quotation'}
+                {submitting ? 'Submitting Official Quote...' : 'Submit Digital Quotation Request'}
               </span>
             </button>
 

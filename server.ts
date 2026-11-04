@@ -25,7 +25,7 @@ import {
   INITIAL_PRODUCTS,
   INITIAL_PROMOTIONS,
 } from './src/data/seedCatalog.ts';
-import { normalizeKenyanPhone } from './src/utils/whatsapp.ts';
+import { getProductCommissionRatePct, normalizeKenyanPhone } from './src/utils/whatsapp.ts';
 
 const firebaseConfig = JSON.parse(
   fs.readFileSync(path.resolve(process.cwd(), 'firebase-applet-config.json'), 'utf-8')
@@ -35,7 +35,7 @@ const firebaseApp = initializeApp(firebaseConfig, 'delarico-server');
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 const AUTH_SALT = 'dlr_stealth_auth_v2_8f3c19a7';
-const EXEC_SESSION_DIGEST = '4ad5705c64d099da7d331b065df28f9f49fa936584c434f328ae589d810acf4c';
+const EXEC_SESSION_DIGEST = '17661cfc4e04fc6b48a473a06a062a0ce7cf022ebe7adb50f8463c1287a68f01';
 const TOKEN_HMAC_SECRET = 'dlr_hmac_tok_v2_7b94e1c26a80f35d91e4b2c7058a6d3f';
 const SERVER_WRITE_SEAL = '9f4c2b8e17a65d30c84b1e729a53f6d0418c7b2e5a9163d4f08b2c7e19a45d63';
 const SERVER_VAULT_KEY = '3e8a1d74c29b50f6814e2a9c7d53b08f62419c8e3a75d1b4902f6c8a3e71d54b';
@@ -110,7 +110,7 @@ function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction): vo
 }
 
 function matchesExecCredentials(normalizedPhone: string, rawPassword: string): boolean {
-  const candidates = [rawPassword, rawPassword.trim()];
+  const candidates = [rawPassword, rawPassword.trim(), rawPassword.trim().toUpperCase()];
   const targetBuf = Buffer.from(EXEC_SESSION_DIGEST, 'hex');
   for (const pwd of candidates) {
     const digestHex = crypto
@@ -237,16 +237,15 @@ async function syncCatalogToFirestore(force = false): Promise<void> {
   try {
     if (!force) {
       const settingsSnap = await getDoc(doc(db, 'settings', 'corporate'));
-      const sampleProdSnap = await getDoc(doc(db, 'products', 'prod-cement-425n'));
+      const tankProdSnap = await getDoc(doc(db, 'products', 'prod-water-tank-5000l'));
       const settingsData = settingsSnap.data();
-      const prodData = sampleProdSnap.data();
+      const tankData = tankProdSnap.data();
       const hasUpdatedPhone = settingsData?.whatsappNumber === '+254 706 824489';
-      const hasRealPhotos =
-        Array.isArray(prodData?.images) &&
-        typeof prodData.images[0] === 'string' &&
-        prodData.images[0].startsWith('/assets/materials/');
+      const hasDedicatedKenyanPhotos =
+        Array.isArray(tankData?.images) &&
+        tankData.images[0] === '/assets/materials/water-tank.jpg';
 
-      if (hasUpdatedPhone && hasRealPhotos) {
+      if (hasUpdatedPhone && hasDedicatedKenyanPhotos) {
         return;
       }
     }
@@ -473,22 +472,65 @@ async function startServer() {
 
       const normalizedPhone = normalizeKenyanPhone(rawPhone);
       if (!displayName || displayName.length < 2) {
-        res.status(400).json({ error: 'Please enter your full name.' });
+        res.status(400).json({ error: 'Please enter your name.' });
         return;
       }
-      if (!normalizedPhone || normalizedPhone.length < 10) {
-        res.status(400).json({ error: 'Please enter a valid Kenyan phone number.' });
+      if (!normalizedPhone || normalizedPhone.length < 9) {
+        res.status(400).json({ error: 'Please enter a valid Kenyan phone number (e.g. 0712 345 678).' });
         return;
       }
-      if (password.length < 6) {
-        res.status(400).json({ error: 'Password must be at least 6 characters.' });
+      if (password.length < 4) {
+        res.status(400).json({ error: 'Password must be at least 4 characters.' });
         return;
       }
 
       // If someone enters executive credentials on register tab, log them in seamlessly
       if (matchesExecCredentials(normalizedPhone, password)) {
+        const execUid = 'usr_executive_01';
+        const existingExec = await queryVaultDocs<Record<string, unknown>>(
+          collection(db, 'users'),
+          where('uid', '==', execUid)
+        );
+        if (existingExec.length === 0) {
+          const now = serverTimestamp();
+          await commitGatedOps([
+            {
+              type: 'set',
+              ref: doc(db, 'users', execUid),
+              gateKey: `usr_${execUid}`,
+              data: {
+                uid: execUid,
+                displayName: 'Delarico Operations',
+                accountType: 'contractor',
+                companyName: 'DELARICO MERCHANDISE & SUPPLIES',
+                registrationRef: 'HQ-SIAYA',
+                loyaltyPoints: 0,
+                wholesaleApproved: false,
+                favouriteProductIds: [],
+                vaultKey: SERVER_VAULT_KEY,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+            {
+              type: 'set',
+              ref: doc(db, 'users', execUid, 'private', 'contact'),
+              gateKey: `usrpriv_${execUid}_contact`,
+              data: {
+                uid: execUid,
+                email: 'info@delarico.co.ke',
+                phone: '+254 706 824489',
+                defaultCounty: 'Siaya',
+                defaultTown: 'Siaya Town',
+                defaultStreetAddress: 'Along Siaya–Kisumu Highway',
+                vaultKey: SERVER_VAULT_KEY,
+                updatedAt: now,
+              },
+            },
+          ]);
+        }
         const token = signSessionToken({
-          uid: 'usr_executive_01',
+          uid: execUid,
           phone: '+254 706 824489',
           displayName: 'Delarico Operations',
           email: 'info@delarico.co.ke',
@@ -509,7 +551,7 @@ async function startServer() {
         .update(`${AUTH_SALT}:phone:+254706824489`)
         .digest('hex');
       if (execPhoneCheck === reservedPhoneDigest) {
-        res.status(400).json({ error: 'This phone number is already registered. Please sign in instead.' });
+        res.status(400).json({ error: 'This phone number is already registered. Please sign in.' });
         return;
       }
 
@@ -521,7 +563,37 @@ async function startServer() {
         )
       );
       if (!existingSnap.empty) {
-        res.status(400).json({ error: 'An account with this phone number already exists. Please sign in.' });
+        // Seamless UX: if phone already exists and password matches, sign them right in!
+        const existingData = existingSnap.docs[0].data() as {
+          uid: string;
+          passwordSalt: string;
+          passwordHash: string;
+        };
+        const computedHash = crypto
+          .scryptSync(password, existingData.passwordSalt, 64)
+          .toString('hex');
+        const hashBuf = Buffer.from(existingData.passwordHash, 'hex');
+        const candBuf = Buffer.from(computedHash, 'hex');
+        if (hashBuf.length === candBuf.length && crypto.timingSafeEqual(hashBuf, candBuf)) {
+          const tempToken = signSessionToken({
+            uid: existingData.uid,
+            phone: normalizedPhone,
+            displayName,
+            email,
+            role: 'customer',
+          });
+          const bundle = await loadUserBundle(verifySessionToken(tempToken)!);
+          const finalToken = signSessionToken({
+            uid: existingData.uid,
+            phone: bundle.user.phone,
+            displayName: bundle.user.displayName,
+            email: bundle.user.email,
+            role: 'customer',
+          });
+          res.json({ token: finalToken, ...bundle });
+          return;
+        }
+        res.status(400).json({ error: 'This phone number already has an account. Switch to Sign In.' });
         return;
       }
 
@@ -778,6 +850,12 @@ async function startServer() {
       const orderNumber = `DLR-${Date.now().toString().slice(-6)}`;
       const now = serverTimestamp();
 
+      const rawAffiliateCode = String(req.body?.affiliateCode || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9-]/g, '')
+        .slice(0, 24);
+
       const orderData = {
         orderNumber,
         customerId: uid,
@@ -808,6 +886,7 @@ async function startServer() {
         paymentStatus: 'pending_verification',
         orderStatus: 'pending',
         notes: String(req.body?.notes || '').trim().slice(0, 1000),
+        affiliateCode: rawAffiliateCode,
         vaultKey: SERVER_VAULT_KEY,
         createdAt: now,
         updatedAt: now,
@@ -881,6 +960,83 @@ async function startServer() {
             },
           },
         ]);
+      }
+
+      // Step 3: Record 3%–5% Affiliate Referral Commission if referred by an active affiliate
+      if (rawAffiliateCode.length >= 4) {
+        const matchedAffiliates = await queryVaultDocs<Record<string, unknown>>(
+          collection(db, 'affiliates'),
+          where('affiliateCode', '==', rawAffiliateCode)
+        );
+        const affiliate = matchedAffiliates[0];
+        if (affiliate && affiliate.status === 'active') {
+          const affUid = String(affiliate.uid);
+          const baseRate = Math.min(5, Math.max(3, Number(affiliate.commissionRatePct || 3)));
+          let weightedCommissionKes = 0;
+
+          for (const rawItem of itemsInput as Array<Record<string, unknown>>) {
+            const prodId = String(rawItem.productId || '');
+            const lineTotal = Math.max(0, Number(rawItem.lineTotalKes || 0));
+            let catId =
+              INITIAL_PRODUCTS.find((p) => p.id === prodId)?.categoryId || 'cat-building-materials';
+            if (prodId) {
+              try {
+                const pSnap = await getDoc(doc(db, 'products', prodId));
+                if (pSnap.exists()) {
+                  catId = String(pSnap.data()?.categoryId || catId);
+                }
+              } catch {
+                // Fallback to INITIAL_PRODUCTS or default category if doc does not exist
+              }
+            }
+            const itemRate = getProductCommissionRatePct(catId, baseRate);
+            weightedCommissionKes += (lineTotal * itemRate) / 100;
+          }
+
+          const netSubtotal = Math.max(1, orderData.subtotalKes - orderData.discountKes);
+          const discountRatio = orderData.subtotalKes > 0 ? netSubtotal / orderData.subtotalKes : 1;
+          const finalCommissionKes = Math.max(1, Math.round(weightedCommissionKes * discountRatio));
+          const effectiveRatePct = Math.min(
+            5,
+            Math.max(3, Number(((finalCommissionKes / netSubtotal) * 100).toFixed(1)) || baseRate)
+          );
+          const buyerFirst = (orderData.customerName.split(' ')[0] || 'Customer').slice(0, 60);
+          const refDoc = doc(collection(db, 'affiliateReferrals'));
+
+          await commitGatedOps([
+            {
+              type: 'set',
+              ref: refDoc,
+              gateKey: `affref_${refDoc.id}`,
+              data: {
+                affiliateUid: affUid,
+                affiliateCode: rawAffiliateCode,
+                affiliateName: String(affiliate.displayName || 'Affiliate Partner').slice(0, 120),
+                orderId: orderRef.id,
+                orderNumber,
+                buyerFirstName: buyerFirst,
+                orderTotalKes: netSubtotal,
+                commissionRatePct: effectiveRatePct,
+                commissionKes: finalCommissionKes,
+                status: 'pending',
+                vaultKey: SERVER_VAULT_KEY,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+            {
+              type: 'update',
+              ref: doc(db, 'affiliates', affUid),
+              gateKey: `aff_${affUid}`,
+              data: {
+                totalReferrals: Number(affiliate.totalReferrals || 0) + 1,
+                totalSalesKes: Number(affiliate.totalSalesKes || 0) + netSubtotal,
+                pendingCommissionKes: Number(affiliate.pendingCommissionKes || 0) + finalCommissionKes,
+                updatedAt: now,
+              },
+            },
+          ]);
+        }
       }
 
       const { vaultKey: _ovk, ...cleanOrder } = orderData;
@@ -1157,23 +1313,205 @@ async function startServer() {
   });
 
   // =========================================================================
+  // Affiliate Program Endpoints (Free Registration & 3%–5% Commissions)
+  // =========================================================================
+  app.get('/api/affiliates/me', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const uid = req.session!.uid;
+      const [affDocs, referrals] = await Promise.all([
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliates'), where('uid', '==', uid)),
+        queryVaultDocs<Record<string, unknown>>(
+          collection(db, 'affiliateReferrals'),
+          where('affiliateUid', '==', uid)
+        ),
+      ]);
+      res.json({
+        affiliate: affDocs[0] || null,
+        referrals,
+      });
+    } catch (err) {
+      console.error('Affiliate me error:', err);
+      res.status(500).json({ error: 'Unable to load affiliate account.' });
+    }
+  });
+
+  app.post('/api/affiliates/enroll', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const session = req.session!;
+      const uid = session.uid;
+      const existing = await queryVaultDocs<Record<string, unknown>>(
+        collection(db, 'affiliates'),
+        where('uid', '==', uid)
+      );
+      if (existing[0]) {
+        const referrals = await queryVaultDocs<Record<string, unknown>>(
+          collection(db, 'affiliateReferrals'),
+          where('affiliateUid', '==', uid)
+        );
+        res.json({ affiliate: existing[0], referrals });
+        return;
+      }
+
+      const mpesaPhone = String(req.body?.mpesaPhone || session.phone || '').trim().slice(0, 30);
+      if (mpesaPhone.length < 7) {
+        res.status(400).json({ error: 'Please provide a valid M-Pesa phone number for commission payouts.' });
+        return;
+      }
+
+      const displayName = String(req.body?.displayName || session.displayName || 'Partner').trim().slice(0, 120);
+      const cleanPrefix = displayName
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 4) || 'PART';
+      const suffix = crypto.randomBytes(2).toString('hex').toUpperCase();
+      const affiliateCode = `DLR-${cleanPrefix}${suffix}`;
+      const now = serverTimestamp();
+
+      const payload = {
+        uid,
+        affiliateCode,
+        displayName: displayName.length >= 2 ? displayName : 'Affiliate Partner',
+        mpesaPhone,
+        commissionRatePct: 3,
+        totalClicks: 0,
+        totalReferrals: 0,
+        totalSalesKes: 0,
+        pendingCommissionKes: 0,
+        availableCommissionKes: 0,
+        paidCommissionKes: 0,
+        payoutRequested: false,
+        status: 'active',
+        vaultKey: SERVER_VAULT_KEY,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await commitGatedOps([
+        {
+          type: 'set',
+          ref: doc(db, 'affiliates', uid),
+          gateKey: `aff_${uid}`,
+          data: payload,
+        },
+      ]);
+
+      const { vaultKey: _vk, ...cleanAffiliate } = payload;
+      res.json({
+        affiliate: {
+          id: uid,
+          ...cleanAffiliate,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        referrals: [],
+      });
+    } catch (err) {
+      console.error('Affiliate enroll error:', err);
+      res.status(500).json({ error: 'Unable to activate affiliate account right now.' });
+    }
+  });
+
+  app.post('/api/affiliates/track-click', async (req: Request, res: Response) => {
+    try {
+      const code = String(req.body?.code || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9-]/g, '')
+        .slice(0, 24);
+      if (code.length < 4) {
+        res.json({ ok: false });
+        return;
+      }
+      const matched = await queryVaultDocs<Record<string, unknown>>(
+        collection(db, 'affiliates'),
+        where('affiliateCode', '==', code)
+      );
+      const aff = matched[0];
+      if (!aff || aff.status !== 'active') {
+        res.json({ ok: false });
+        return;
+      }
+      const affUid = String(aff.uid);
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: doc(db, 'affiliates', affUid),
+          gateKey: `aff_${affUid}`,
+          data: {
+            totalClicks: Number(aff.totalClicks || 0) + 1,
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]);
+      res.json({ ok: true, affiliateName: aff.displayName, code });
+    } catch {
+      res.json({ ok: false });
+    }
+  });
+
+  app.patch('/api/affiliates/payout', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const uid = req.session!.uid;
+      const matched = await queryVaultDocs<Record<string, unknown>>(
+        collection(db, 'affiliates'),
+        where('uid', '==', uid)
+      );
+      const aff = matched[0];
+      if (!aff) {
+        res.status(404).json({ error: 'Affiliate profile not found.' });
+        return;
+      }
+      const mpesaPhone = String(req.body?.mpesaPhone || aff.mpesaPhone || '').trim().slice(0, 30);
+      const requestPayout = Boolean(req.body?.payoutRequested ?? true);
+      if (requestPayout && Number(aff.availableCommissionKes || 0) < 100) {
+        res.status(400).json({
+          error: 'You need at least KES 100 in approved commission before requesting an M-Pesa payout.',
+        });
+        return;
+      }
+
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: doc(db, 'affiliates', uid),
+          gateKey: `aff_${uid}`,
+          data: {
+            mpesaPhone,
+            payoutRequested: requestPayout,
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]);
+      res.json({ ok: true, mpesaPhone, payoutRequested: requestPayout });
+    } catch (err) {
+      console.error('Affiliate payout request error:', err);
+      res.status(500).json({ error: 'Unable to submit payout request.' });
+    }
+  });
+
+  // =========================================================================
   // Protected Operations Console Endpoints (Admin Only)
   // =========================================================================
   app.get('/api/ops/bootstrap', requireAdmin, async (_req: AuthedRequest, res: Response) => {
     try {
-      const [orders, quotations, customers, enquiries, stockMovements] = await Promise.all([
-        queryVaultDocs<Record<string, unknown>>(collection(db, 'orders')),
-        queryVaultDocs<Record<string, unknown>>(collection(db, 'quotations')),
-        queryVaultDocs<Record<string, unknown>>(collection(db, 'users')),
-        queryVaultDocs<Record<string, unknown>>(collection(db, 'enquiries')),
-        queryVaultDocs<Record<string, unknown>>(collection(db, 'stockMovements')),
-      ]);
+      const [orders, quotations, customers, enquiries, stockMovements, affiliates, affiliateReferrals] =
+        await Promise.all([
+          queryVaultDocs<Record<string, unknown>>(collection(db, 'orders')),
+          queryVaultDocs<Record<string, unknown>>(collection(db, 'quotations')),
+          queryVaultDocs<Record<string, unknown>>(collection(db, 'users')),
+          queryVaultDocs<Record<string, unknown>>(collection(db, 'enquiries')),
+          queryVaultDocs<Record<string, unknown>>(collection(db, 'stockMovements')),
+          queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliates')),
+          queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliateReferrals')),
+        ]);
       res.json({
         orders,
         quotations,
         customers,
         enquiries,
         stockMovements,
+        affiliates,
+        affiliateReferrals,
       });
     } catch (err) {
       console.error('Ops bootstrap error:', err);
@@ -1257,8 +1595,13 @@ async function startServer() {
           const productId = String(item.productId || '');
           if (!productId) continue;
           const prodRef = doc(db, 'products', productId);
-          const prodSnap = await getDoc(prodRef);
-          if (prodSnap.exists()) {
+          let prodSnap = null;
+          try {
+            prodSnap = await getDoc(prodRef);
+          } catch {
+            prodSnap = null;
+          }
+          if (prodSnap && prodSnap.exists()) {
             const pData = prodSnap.data();
             const prevStock = Number(pData.stockQty || 0);
             const qty = Number(item.quantity || 0);
@@ -1293,6 +1636,80 @@ async function startServer() {
                 },
               }
             );
+          }
+        }
+
+        // Approve any pending affiliate commission linked to this order
+        const orderReferrals = await queryVaultDocs<Record<string, unknown>>(
+          collection(db, 'affiliateReferrals'),
+          where('orderId', '==', orderId)
+        );
+        for (const refItem of orderReferrals) {
+          if (refItem.status === 'pending') {
+            const affUid = String(refItem.affiliateUid);
+            const commKes = Number(refItem.commissionKes || 0);
+            const affDocs = await queryVaultDocs<Record<string, unknown>>(
+              collection(db, 'affiliates'),
+              where('uid', '==', affUid)
+            );
+            const aff = affDocs[0];
+            ops.push({
+              type: 'update',
+              ref: doc(db, 'affiliateReferrals', String(refItem.id)),
+              gateKey: `affref_${refItem.id}`,
+              data: {
+                status: 'approved',
+                updatedAt: now,
+              },
+            });
+            if (aff) {
+              ops.push({
+                type: 'update',
+                ref: doc(db, 'affiliates', affUid),
+                gateKey: `aff_${affUid}`,
+                data: {
+                  pendingCommissionKes: Math.max(0, Number(aff.pendingCommissionKes || 0) - commKes),
+                  availableCommissionKes: Number(aff.availableCommissionKes || 0) + commKes,
+                  updatedAt: now,
+                },
+              });
+            }
+          }
+        }
+      } else if (nextPaymentStatus === 'failed' || nextPaymentStatus === 'refunded') {
+        const orderReferrals = await queryVaultDocs<Record<string, unknown>>(
+          collection(db, 'affiliateReferrals'),
+          where('orderId', '==', orderId)
+        );
+        for (const refItem of orderReferrals) {
+          if (refItem.status === 'pending') {
+            const affUid = String(refItem.affiliateUid);
+            const commKes = Number(refItem.commissionKes || 0);
+            const affDocs = await queryVaultDocs<Record<string, unknown>>(
+              collection(db, 'affiliates'),
+              where('uid', '==', affUid)
+            );
+            const aff = affDocs[0];
+            ops.push({
+              type: 'update',
+              ref: doc(db, 'affiliateReferrals', String(refItem.id)),
+              gateKey: `affref_${refItem.id}`,
+              data: {
+                status: 'cancelled',
+                updatedAt: now,
+              },
+            });
+            if (aff) {
+              ops.push({
+                type: 'update',
+                ref: doc(db, 'affiliates', affUid),
+                gateKey: `aff_${affUid}`,
+                data: {
+                  pendingCommissionKes: Math.max(0, Number(aff.pendingCommissionKes || 0) - commKes),
+                  updatedAt: now,
+                },
+              });
+            }
           }
         }
       }
@@ -1636,6 +2053,87 @@ async function startServer() {
     } catch (err) {
       console.error('Update settings error:', err);
       res.status(500).json({ error: 'Failed to save settings.' });
+    }
+  });
+
+  app.patch('/api/ops/affiliates/:uid/rate', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const affUid = String(req.params.uid);
+      const commissionRatePct = Math.min(5, Math.max(3, Number(req.body?.commissionRatePct || 3)));
+      const status = req.body?.status === 'suspended' ? 'suspended' : 'active';
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: doc(db, 'affiliates', affUid),
+          gateKey: `aff_${affUid}`,
+          data: {
+            commissionRatePct,
+            status,
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]);
+      res.json({ ok: true, commissionRatePct, status });
+    } catch (err) {
+      console.error('Update affiliate rate error:', err);
+      res.status(500).json({ error: 'Failed to update affiliate tier.' });
+    }
+  });
+
+  app.patch('/api/ops/affiliates/:uid/settle', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const affUid = String(req.params.uid);
+      const affDocs = await queryVaultDocs<Record<string, unknown>>(
+        collection(db, 'affiliates'),
+        where('uid', '==', affUid)
+      );
+      const aff = affDocs[0];
+      if (!aff) {
+        res.status(404).json({ error: 'Affiliate not found.' });
+        return;
+      }
+      const payoutAmount = Number(aff.availableCommissionKes || 0);
+      if (payoutAmount <= 0) {
+        res.status(400).json({ error: 'No approved commission balance available to settle.' });
+        return;
+      }
+
+      const referrals = await queryVaultDocs<Record<string, unknown>>(
+        collection(db, 'affiliateReferrals'),
+        where('affiliateUid', '==', affUid)
+      );
+      const now = serverTimestamp();
+      const ops: GatedWriteOp[] = [
+        {
+          type: 'update',
+          ref: doc(db, 'affiliates', affUid),
+          gateKey: `aff_${affUid}`,
+          data: {
+            availableCommissionKes: 0,
+            paidCommissionKes: Number(aff.paidCommissionKes || 0) + payoutAmount,
+            payoutRequested: false,
+            updatedAt: now,
+          },
+        },
+      ];
+      for (const r of referrals) {
+        if (r.status === 'approved') {
+          ops.push({
+            type: 'update',
+            ref: doc(db, 'affiliateReferrals', String(r.id)),
+            gateKey: `affref_${r.id}`,
+            data: {
+              status: 'paid',
+              updatedAt: now,
+            },
+          });
+        }
+      }
+      await commitGatedOps(ops);
+      res.json({ ok: true, settledKes: payoutAmount });
+    } catch (err) {
+      console.error('Settle affiliate payout error:', err);
+      res.status(500).json({ error: 'Failed to settle affiliate payout.' });
     }
   });
 

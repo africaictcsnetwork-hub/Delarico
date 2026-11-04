@@ -18,7 +18,8 @@
    - `/users/{userId}/addresses/{addressId}` requires the parent `/users/{userId}` document to exist.
 7. **Terminal State Locking**: Once an Order reaches `delivered` or `cancelled`, or a Quotation reaches `accepted` or `declined`, non-admin client updates are permanently rejected.
 8. **Temporal Integrity**: Every `createdAt` on `create` and `updatedAt` on `update` must equal `request.time`. Immortal fields (`createdAt`, `customerId`, `uid`, `orderNumber`, `quoteNumber`) cannot be mutated on update.
-9. **Query Enforcer (`allow list`)**: No blanket `isSignedIn()` list rules exist. Public catalog collections check `resource.data.isActive == true` (or `status == 'published'` / `isPublic == true`); user-scoped collections check `resource.data.customerId == request.auth.uid`, `resource.data.uid == request.auth.uid`, or `hasServerVaultRead()`.
+9. **Query Enforcer (`allow list`)**: No blanket `isSignedIn()` list rules exist. Public catalog collections check `resource.data.isActive == true` (or `status == 'published'` / `isPublic == true`); user-scoped collections check `resource.data.customerId == request.auth.uid`, `resource.data.uid == request.auth.uid`, `resource.data.affiliateUid == request.auth.uid`, or `hasServerVaultRead()`.
+10. **Affiliate Commission Integrity & PII Protection**: `/affiliates/{affiliateId}` and `/affiliateReferrals/{referralId}` enforce `commissionRatePct >= 3 && commissionRatePct <= 5`, start with zeroed balances (`pendingCommissionKes == 0`, `availableCommissionKes == 0`, `paidCommissionKes == 0`) on creation, require parent `/users/{affiliateId}` and `/orders/{orderId}` existence, and protect `mpesaPhone` PII via `vaultKey` / owner-or-admin read restrictions.
 
 ---
 

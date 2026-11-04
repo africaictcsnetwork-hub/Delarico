@@ -77,10 +77,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   );
 
   const navLinks = [
-    { label: 'Shop Materials', path: '/products' },
-    { label: 'Services', path: '/services' },
-    { label: 'Get Quote', path: '/request-quote' },
-    { label: 'About Us', path: '/about' },
+    { label: 'Shop Deals', path: '/' },
+    { label: 'All Categories', path: '/products' },
+    { label: 'Sell & Earn (3–5%)', path: '/affiliates' },
+    { label: 'Bulk Quote', path: '/request-quote' },
     { label: 'Contact', path: '/contact' },
   ];
 
@@ -159,11 +159,40 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 </Link>
               ))}
               <Link
-                to="/account"
+                to="/services"
                 className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
               >
-                {user ? 'My Account' : 'Sign In / Create Account'}
+                Wholesale &amp; Delivery Services
               </Link>
+              <Link
+                to="/about"
+                className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
+              >
+                About Delarico
+              </Link>
+              {user ? (
+                <Link
+                  to="/account"
+                  className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
+                >
+                  My Account
+                </Link>
+              ) : (
+                <>
+                  <Link
+                    to="/account"
+                    className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
+                  >
+                    Sign In
+                  </Link>
+                  <Link
+                    to="/account?mode=register"
+                    className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
+                  >
+                    Create Quick Account
+                  </Link>
+                </>
+              )}
               <Link
                 to="/partnerships"
                 className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
@@ -209,13 +238,21 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 </span>
               </Link>
             ) : (
-              <Link
-                to="/account"
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-royal-600 whitespace-nowrap shrink-0"
-              >
-                <UserCheck className="w-3.5 h-3.5 text-navy-900" />
-                <span>Sign In / Register</span>
-              </Link>
+              <>
+                <Link
+                  to="/account"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-royal-600 whitespace-nowrap shrink-0"
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-navy-900" />
+                  <span>Sign In</span>
+                </Link>
+                <Link
+                  to="/account?mode=register"
+                  className="inline-flex items-center px-3 py-2 text-xs font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 whitespace-nowrap shrink-0"
+                >
+                  <span>Create Account</span>
+                </Link>
+              </>
             )}
 
             {isAdmin && (
@@ -314,6 +351,11 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               </h3>
               <ul className="space-y-2.5 text-xs">
                 <li>
+                  <Link to="/affiliates" className="text-gold-400 font-semibold hover:text-gold-300 transition-colors">
+                    Affiliate Program — Earn 3%–5% Commission
+                  </Link>
+                </li>
+                <li>
                   <Link to="/about" className="hover:text-white transition-colors">
                     Company Profile &amp; Values
                   </Link>
@@ -336,11 +378,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 <li>
                   <Link to="/partnerships" className="hover:text-white transition-colors">
                     Supplier Partnership Portal
-                  </Link>
-                </li>
-                <li>
-                  <Link to="/compare" className="hover:text-white transition-colors">
-                    Compare Material Specifications
                   </Link>
                 </li>
               </ul>

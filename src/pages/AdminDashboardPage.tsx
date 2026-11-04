@@ -16,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Settings,
+  Share2,
   Tag,
   Trash2,
   Upload,
@@ -25,6 +26,8 @@ import {
 import { OFFICIAL_LOGO_PATH } from '../firebase';
 import { useStore } from '../context/StoreContext';
 import {
+  AffiliateProfile,
+  AffiliateReferral,
   CustomerEnquiry,
   Order,
   OrderItem,
@@ -54,6 +57,7 @@ type AdminSection =
   | 'inventory'
   | 'quotations'
   | 'customers'
+  | 'affiliates'
   | 'promotions'
   | 'financials'
   | 'branches';
@@ -118,6 +122,8 @@ export const AdminDashboardPage: React.FC = () => {
   const [customers, setCustomers] = useState<UserPublicProfile[]>([]);
   const [enquiries, setEnquiries] = useState<CustomerEnquiry[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
+  const [affiliates, setAffiliates] = useState<AffiliateProfile[]>([]);
+  const [affiliateReferrals, setAffiliateReferrals] = useState<AffiliateReferral[]>([]);
 
   // Invoice Modal
   const [invoiceTarget, setInvoiceTarget] = useState<{ order: Order; items: OrderItem[] } | null>(
@@ -200,12 +206,16 @@ export const AdminDashboardPage: React.FC = () => {
         customers: UserPublicProfile[];
         enquiries: CustomerEnquiry[];
         stockMovements: StockMovement[];
+        affiliates?: AffiliateProfile[];
+        affiliateReferrals?: AffiliateReferral[];
       }>('/api/ops/bootstrap');
       setOrders(sortNewest(data.orders || []));
       setQuotations(sortNewest(data.quotations || []));
       setCustomers(data.customers || []);
       setEnquiries(sortNewest(data.enquiries || []));
       setStockMovements(sortNewest(data.stockMovements || []));
+      setAffiliates(sortNewest(data.affiliates || []));
+      setAffiliateReferrals(sortNewest(data.affiliateReferrals || []));
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Unable to load management records.', 'error');
     } finally {
@@ -679,6 +689,12 @@ export const AdminDashboardPage: React.FC = () => {
         label: 'Customers & Enquiries',
         icon: Users,
         count: customers.length + enquiries.length,
+      },
+      {
+        id: 'affiliates',
+        label: 'Affiliates (3–5%)',
+        icon: Share2,
+        count: affiliates.length,
       },
       { id: 'promotions', label: 'Promotions', icon: Tag, count: promotions.length },
       { id: 'financials', label: 'Financials & Invoices', icon: Wallet },
@@ -2133,6 +2149,182 @@ export const AdminDashboardPage: React.FC = () => {
                     ))}
                   </div>
                 </form>
+              </div>
+            )}
+
+            {/* 10. AFFILIATE PARTNERS & COMMISSION PAYOUTS */}
+            {section === 'affiliates' && (
+              <div className="space-y-6">
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="font-display text-lg font-bold text-slate-900">
+                        Affiliate Sales Network (3%–5% Commission)
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Monitor affiliate clicks, referred orders, base commission tiers (3%–5%), and settle M-Pesa payouts.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadCsv('delarico-affiliates.csv', [
+                          [
+                            'Name',
+                            'Code',
+                            'M-Pesa Phone',
+                            'Base Rate %',
+                            'Clicks',
+                            'Referrals',
+                            'Sales KES',
+                            'Pending KES',
+                            'Available KES',
+                            'Paid KES',
+                            'Payout Requested',
+                          ],
+                          ...affiliates.map((a) => [
+                            a.displayName,
+                            a.affiliateCode,
+                            a.mpesaPhone,
+                            String(a.commissionRatePct),
+                            String(a.totalClicks),
+                            String(a.totalReferrals),
+                            String(a.totalSalesKes),
+                            String(a.pendingCommissionKes),
+                            String(a.availableCommissionKes),
+                            String(a.paidCommissionKes),
+                            a.payoutRequested ? 'YES' : 'NO',
+                          ]),
+                        ])
+                      }
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export Affiliates CSV</span>
+                    </button>
+                  </div>
+
+                  {affiliates.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-8 text-center">
+                      No affiliate partners enrolled yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {affiliates.map((aff) => (
+                        <div
+                          key={aff.uid}
+                          className="border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                        >
+                          <div className="space-y-1">
+                            <div className="text-sm font-bold text-slate-900">
+                              {aff.displayName}{' '}
+                              <span className="font-mono text-xs text-royal-700 ml-1">
+                                ({aff.affiliateCode})
+                              </span>
+                              {aff.payoutRequested && (
+                                <span className="ml-2 text-xs font-semibold text-amber-700">
+                                  · M-Pesa Payout Requested
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-500 tabular-nums">
+                              M-Pesa: <strong>{aff.mpesaPhone || 'Not set'}</strong> · Clicks:{' '}
+                              {aff.totalClicks} · Orders: {aff.totalReferrals} · Sales:{' '}
+                              {formatKes(aff.totalSalesKes)}
+                            </div>
+                            <div className="text-xs text-slate-600 tabular-nums">
+                              Pending: <strong className="text-amber-700">{formatKes(aff.pendingCommissionKes)}</strong>{' '}
+                              · Available:{' '}
+                              <strong className="text-emerald-700">{formatKes(aff.availableCommissionKes)}</strong>{' '}
+                              · Paid Out:{' '}
+                              <strong className="text-royal-700">{formatKes(aff.paidCommissionKes)}</strong>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <select
+                              value={aff.commissionRatePct}
+                              onChange={async (e) => {
+                                const nextRate = Number(e.target.value);
+                                try {
+                                  await apiFetch(`/api/ops/affiliates/${aff.uid}/rate`, {
+                                    method: 'PATCH',
+                                    body: JSON.stringify({ commissionRatePct: nextRate }),
+                                  });
+                                  await loadOpsData();
+                                  notify(`Updated ${aff.displayName} base rate to ${nextRate}%.`, 'success');
+                                } catch (err) {
+                                  notify(err instanceof Error ? err.message : 'Failed to update rate.', 'error');
+                                }
+                              }}
+                              className="px-2.5 py-2 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg"
+                            >
+                              <option value={3}>Base Tier: 3%</option>
+                              <option value={4}>Silver Tier: 4%</option>
+                              <option value={5}>VIP Tier: 5%</option>
+                            </select>
+
+                            <button
+                              type="button"
+                              disabled={aff.availableCommissionKes <= 0}
+                              onClick={async () => {
+                                try {
+                                  await apiFetch(`/api/ops/affiliates/${aff.uid}/settle`, {
+                                    method: 'PATCH',
+                                  });
+                                  await loadOpsData();
+                                  notify(
+                                    `Marked ${formatKes(aff.availableCommissionKes)} M-Pesa payout settled for ${aff.displayName}.`,
+                                    'success'
+                                  );
+                                } catch (err) {
+                                  notify(err instanceof Error ? err.message : 'Payout settlement failed.', 'error');
+                                }
+                              }}
+                              className="px-3.5 py-2 text-xs font-semibold text-white bg-emerald-700 rounded-lg hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400"
+                            >
+                              Settle M-Pesa ({formatKes(aff.availableCommissionKes)})
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {affiliateReferrals.length > 0 && (
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+                    <h3 className="font-display text-base font-bold text-slate-900">
+                      Referred Orders Ledger ({affiliateReferrals.length})
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-slate-500">
+                            <th className="py-2 pr-3 font-semibold">Order #</th>
+                            <th className="py-2 px-3 font-semibold">Affiliate Code</th>
+                            <th className="py-2 px-3 font-semibold">Order Value</th>
+                            <th className="py-2 px-3 font-semibold">Commission</th>
+                            <th className="py-2 pl-3 font-semibold text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {affiliateReferrals.map((r) => (
+                            <tr key={r.id}>
+                              <td className="py-2.5 pr-3 font-semibold tabular-nums">#{r.orderNumber}</td>
+                              <td className="py-2.5 px-3 font-mono text-royal-700">{r.affiliateCode}</td>
+                              <td className="py-2.5 px-3 tabular-nums">{formatKes(r.orderTotalKes)}</td>
+                              <td className="py-2.5 px-3 font-bold text-emerald-700 tabular-nums">
+                                {formatKes(r.commissionKes)} ({r.commissionRatePct}%)
+                              </td>
+                              <td className="py-2.5 pl-3 text-right capitalize font-medium">{r.status}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

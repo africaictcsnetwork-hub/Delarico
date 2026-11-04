@@ -1,6 +1,6 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeftRight, Heart, MessageCircle, ShoppingBag } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowLeftRight, Heart, MessageCircle, ShoppingBag, Zap } from 'lucide-react';
 import { Product } from '../types';
 import { useStore } from '../context/StoreContext';
 import { buildProductEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
@@ -11,6 +11,7 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
+  const navigate = useNavigate();
   const {
     addToCart,
     compareIds,
@@ -24,14 +25,25 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const isCompared = compareIds.includes(product.id);
   const isFav = favouriteIds.includes(product.id);
   const displayPrice = getEffectiveUnitPrice(product, 1);
+  const savingsPct =
+    product.compareAtPriceKes > displayPrice
+      ? Math.round(((product.compareAtPriceKes - displayPrice) / product.compareAtPriceKes) * 100)
+      : 0;
+
   const waUrl = buildWhatsAppUrl(
     buildProductEnquiryMessage(product, 1, displayPrice),
     settings.whatsappNumber
   );
 
+  const handleBuyNow = () => {
+    if (product.stockQty <= 0) return;
+    addToCart(product, 1);
+    navigate('/checkout');
+  };
+
   return (
     <article className="group flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-slate-300">
-      {/* 4:3 Real Product Photograph */}
+      {/* 4:3 Real Kenyan Product Photograph */}
       <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
         <Link to={`/product/${product.slug}`} className="block w-full h-full">
           <ResilientImage
@@ -43,64 +55,66 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         </Link>
 
         {/* Functional Quick Actions (Save + Compare) */}
-        <div className="absolute top-3 right-3 flex items-center gap-1.5">
+        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
           <button
             type="button"
             onClick={() => toggleFavourite(product.id)}
             aria-label={isFav ? 'Remove from favourites' : 'Save to favourites'}
-            className={`w-9 h-9 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
+            className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
               isFav
                 ? 'bg-navy-900 text-gold-400 border-navy-900'
                 : 'bg-white/95 text-slate-700 border-slate-200 hover:text-navy-900'
             }`}
           >
-            <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+            <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-current' : ''}`} />
           </button>
           <button
             type="button"
             onClick={() => toggleCompare(product.id)}
             aria-label="Compare specifications"
             title="Compare specifications"
-            className={`w-9 h-9 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
+            className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
               isCompared
                 ? 'bg-royal-700 text-white border-royal-700'
                 : 'bg-white/95 text-slate-700 border-slate-200 hover:text-navy-900'
             }`}
           >
-            <ArrowLeftRight className="w-4 h-4" />
+            <ArrowLeftRight className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Contiguous Product Details */}
-      <div className="flex flex-col flex-1 p-5">
+      {/* Direct-to-Sale Purchase Details */}
+      <div className="flex flex-col flex-1 p-4">
         {/* Clean unboxed metadata */}
-        <div className="flex items-center flex-wrap gap-1.5 text-xs text-slate-500 mb-1.5">
-          <span>{product.categoryName}</span>
+        <div className="flex items-center flex-wrap gap-1.5 text-xs text-slate-500 mb-1">
+          <span className="truncate max-w-[140px]">{product.categoryName}</span>
           <span aria-hidden="true">·</span>
           <span className={product.stockQty > 0 ? 'text-emerald-700 font-medium' : 'text-red-700 font-medium'}>
             {product.stockQty > 0 ? `${product.stockQty.toLocaleString()} in stock` : 'Out of stock'}
           </span>
+          {savingsPct > 0 && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-amber-700 font-semibold tabular-nums">Save {savingsPct}%</span>
+            </>
+          )}
         </div>
 
         <Link
           to={`/product/${product.slug}`}
-          className="text-base font-semibold text-slate-900 hover:text-royal-700 transition-colors line-clamp-2 mb-1.5"
+          className="text-sm sm:text-base font-semibold text-slate-900 hover:text-royal-700 transition-colors line-clamp-2 mb-1 leading-snug"
         >
           {product.name}
         </Link>
 
-        <p className="text-xs text-slate-500 line-clamp-1 mb-2">
-          {product.brand} · {product.dimensions}
+        <p className="text-xs text-slate-500 line-clamp-1 mb-2.5">
+          {product.brand} · {product.unit}
         </p>
 
-        {product.onPromotion && product.promoLabel && (
-          <p className="text-xs font-semibold text-amber-700 mb-2">{product.promoLabel}</p>
-        )}
-
-        {/* Pricing Baseline */}
-        <div className="mt-auto pt-3 border-t border-slate-100">
-          <div className="flex items-baseline justify-between gap-2 mb-1">
+        {/* Pricing & Direct Buy Controls */}
+        <div className="mt-auto pt-2.5 border-t border-slate-100">
+          <div className="flex items-baseline justify-between gap-2 mb-0.5">
             <div className="flex items-baseline gap-2">
               <span className="text-lg font-bold text-navy-900 tabular-nums">
                 {formatKes(displayPrice)}
@@ -111,30 +125,39 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 </span>
               )}
             </div>
-            <span className="text-xs text-slate-500 whitespace-nowrap">per {product.unit}</span>
           </div>
 
-          <p className="text-xs text-emerald-700 font-medium tabular-nums mb-4">
-            Wholesale: {formatKes(product.wholesalePriceKes)} ({product.minWholesaleQty}+ {product.unit}s)
+          <p className="text-xs text-emerald-700 font-medium tabular-nums mb-3">
+            Bulk ({product.minWholesaleQty}+): {formatKes(product.wholesalePriceKes)} / {product.unit}
           </p>
 
-          <div className="grid grid-cols-5 gap-2">
+          <div className="grid grid-cols-12 gap-1.5">
+            <button
+              type="button"
+              onClick={handleBuyNow}
+              disabled={product.stockQty <= 0}
+              className="col-span-6 inline-flex items-center justify-center gap-1 px-2.5 py-2 text-xs font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 disabled:bg-slate-200 disabled:text-slate-400 transition-colors whitespace-nowrap"
+            >
+              <Zap className="w-3.5 h-3.5 shrink-0" />
+              <span>Buy Now</span>
+            </button>
             <button
               type="button"
               onClick={() => addToCart(product, 1)}
               disabled={product.stockQty <= 0}
-              className="col-span-4 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 disabled:bg-slate-300 transition-colors whitespace-nowrap"
+              title="Add to Cart"
+              className="col-span-4 inline-flex items-center justify-center gap-1 px-2.5 py-2 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 disabled:bg-slate-300 transition-colors whitespace-nowrap"
             >
-              <ShoppingBag className="w-3.5 h-3.5" />
-              <span>Add to Cart</span>
+              <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+              <span>Cart</span>
             </button>
             <a
               href={waUrl}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label={`Enquire about ${product.name} on WhatsApp`}
-              title="Order or enquire on WhatsApp"
-              className="col-span-1 inline-flex items-center justify-center py-2.5 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
+              aria-label={`Order ${product.name} on WhatsApp`}
+              title="Order on WhatsApp"
+              className="col-span-2 inline-flex items-center justify-center py-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
             >
               <MessageCircle className="w-4 h-4" />
             </a>

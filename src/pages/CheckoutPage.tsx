@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { CheckCircle2, FileText, Lock, MessageCircle, ShieldCheck, Smartphone, Truck } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, FileText, MessageCircle, ShieldCheck, Smartphone, Truck, UserCheck } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { DeliveryMethod, Order, OrderItem, PaymentMethod } from '../types';
 import { buildCartEnquiryMessage, buildOrderFollowUpMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
@@ -21,14 +21,21 @@ export const CheckoutPage: React.FC = () => {
     cartDiscountKes,
     appliedPromo,
     clearCart,
+    loginWithPhone,
+    registerWithPhone,
     apiFetch,
     refreshAccountSession,
+    affiliateRef,
+    captureAffiliateRef,
     notify,
   } = useStore();
 
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
+  const [guestAuthMode, setGuestAuthMode] = useState<'register' | 'login'>('register');
+  const [guestPassword, setGuestPassword] = useState('');
+  const [showGuestPwd, setShowGuestPwd] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState(branches[0]?.id || 'branch-siaya-hq');
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>('local_siaya');
   const [deliveryCounty, setDeliveryCounty] = useState('Siaya');
@@ -82,10 +89,6 @@ export const CheckoutPage: React.FC = () => {
 
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) {
-      navigate('/account?redirect=%2Fcheckout');
-      return;
-    }
     if (cart.length === 0) {
       notify('Your cart is empty.', 'error');
       return;
@@ -97,6 +100,33 @@ export const CheckoutPage: React.FC = () => {
 
     setSubmitting(true);
     try {
+      let activeUser = user;
+      if (!activeUser) {
+        if (!guestPassword || guestPassword.length < 4) {
+          notify('Please enter a simple password or 4-digit PIN (at least 4 characters) to track your order.', 'error');
+          setSubmitting(false);
+          return;
+        }
+        if (guestAuthMode === 'login') {
+          activeUser = await loginWithPhone(customerPhone.trim(), guestPassword);
+        } else {
+          activeUser = await registerWithPhone({
+            displayName: customerName.trim() || 'Customer',
+            phone: customerPhone.trim(),
+            password: guestPassword,
+            email: customerEmail.trim() || undefined,
+          });
+        }
+        if (!activeUser) {
+          setSubmitting(false);
+          return;
+        }
+        if (activeUser.isAdmin) {
+          navigate('/portal/workspace', { replace: true });
+          return;
+        }
+      }
+
       const itemsPayload = cart.map(({ product, quantity }) => {
         const unitPriceKes = getEffectiveUnitPrice(product, quantity);
         return {
@@ -118,9 +148,9 @@ export const CheckoutPage: React.FC = () => {
       const res = await apiFetch<{ order: Order; items: OrderItem[] }>('/api/customer/orders', {
         method: 'POST',
         body: JSON.stringify({
-          customerName: customerName.trim(),
+          customerName: customerName.trim() || activeUser.displayName || 'Customer',
           customerPhone: customerPhone.trim(),
-          customerEmail: customerEmail.trim() || user.email || 'customer@delarico.co.ke',
+          customerEmail: customerEmail.trim() || activeUser.email || 'customer@delarico.co.ke',
           accountType: userProfile?.accountType || 'individual',
           branchId: selectedBranchId,
           deliveryCounty: deliveryCounty.trim(),
@@ -130,6 +160,7 @@ export const CheckoutPage: React.FC = () => {
           subtotalKes: cartSubtotalKes,
           discountKes: cartDiscountKes,
           promoCode: appliedPromo ? appliedPromo.code : '',
+          affiliateCode: affiliateRef || '',
           deliveryFeeKes,
           totalKes,
           paymentMethod,
@@ -247,37 +278,7 @@ export const CheckoutPage: React.FC = () => {
         <h1 className="text-2xl sm:text-3xl font-bold text-navy-900">Complete Your Order</h1>
       </div>
 
-      {!user ? (
-        <div className="p-8 bg-slate-50 border border-slate-200 rounded-xl max-w-xl space-y-5">
-          <div className="flex items-center gap-2.5 text-navy-900 font-bold text-lg">
-            <Lock className="w-5 h-5 text-gold-600 shrink-0" />
-            <span>Sign In or Create an Account to Checkout</span>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-            Log in with your phone number and password (or create a free account in 20 seconds) to track lorry
-            dispatch, earn loyalty points, and download official DELARICO invoices and receipts.
-          </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              to="/account?redirect=%2Fcheckout"
-              className="inline-flex items-center justify-center px-6 py-3 text-xs sm:text-sm font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 transition-colors"
-            >
-              Sign In / Create Account
-            </Link>
-            {cart.length > 0 && (
-              <a
-                href={cartWaUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold text-white bg-emerald-700 rounded-lg hover:bg-emerald-600 transition-colors"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>Order Directly on WhatsApp</span>
-              </a>
-            )}
-          </div>
-        </div>
-      ) : cart.length === 0 ? (
+      {cart.length === 0 ? (
         <div className="p-10 bg-slate-50 border border-slate-200 rounded-xl text-center space-y-3">
           <p className="text-sm font-semibold text-navy-900">Your shopping cart is currently empty.</p>
           <Link
@@ -291,11 +292,39 @@ export const CheckoutPage: React.FC = () => {
         <form onSubmit={handlePlaceOrder} className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
           {/* Left Checkout Form */}
           <div className="lg:col-span-7 space-y-8">
-            {/* 1. Customer Contact */}
+            {/* 1. Customer Contact & Instant Account Setup */}
             <section className="p-6 bg-white border border-slate-200 rounded-xl space-y-4">
-              <h2 className="text-base font-bold text-navy-900">1. Customer &amp; Site Contact</h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-base font-bold text-navy-900">1. Your Details &amp; Order Tracking</h2>
+                {!user && (
+                  <div className="inline-flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setGuestAuthMode('register')}
+                      className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                        guestAuthMode === 'register'
+                          ? 'bg-white text-navy-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      New Customer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGuestAuthMode('login')}
+                      className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                        guestAuthMode === 'login'
+                          ? 'bg-white text-navy-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Existing Account
+                    </button>
+                  </div>
+                )}
+              </div>
 
-              {addresses.length > 0 && (
+              {user && addresses.length > 0 && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     Load Saved Delivery Address
@@ -317,18 +346,23 @@ export const CheckoutPage: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name / Site Foreman *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Your Name / Site Foreman *
+                  </label>
                   <input
                     type="text"
-                    required
+                    required={guestAuthMode === 'register' || Boolean(user)}
                     maxLength={120}
+                    placeholder="e.g. Jane Onyango"
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2.5 text-xs border border-slate-200 rounded-lg"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Contact / M-Pesa Phone *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Phone / M-Pesa Number *
+                  </label>
                   <input
                     type="tel"
                     required
@@ -336,9 +370,58 @@ export const CheckoutPage: React.FC = () => {
                     placeholder="e.g. 0712 345 678"
                     value={customerPhone}
                     onChange={(e) => setCustomerPhone(e.target.value)}
-                    className="w-full px-3 py-2 text-xs tabular-nums border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2.5 text-xs tabular-nums border border-slate-200 rounded-lg"
                   />
                 </div>
+              </div>
+
+              {!user && (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-navy-900">
+                    <UserCheck className="w-4 h-4 text-royal-700 shrink-0" />
+                    <span>
+                      {guestAuthMode === 'register'
+                        ? 'Choose a quick Password or 4-digit PIN (auto-creates your account as you order)'
+                        : 'Enter your account Password to sign in & place order'}
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showGuestPwd ? 'text' : 'password'}
+                      required
+                      minLength={4}
+                      value={guestPassword}
+                      onChange={(e) => setGuestPassword(e.target.value)}
+                      placeholder={
+                        guestAuthMode === 'register'
+                          ? 'At least 4 characters (e.g. 4-digit PIN)'
+                          : 'Enter your password'
+                      }
+                      className="w-full pl-3 pr-10 py-2 text-xs bg-white border border-slate-200 rounded-lg"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowGuestPwd((v) => !v)}
+                      aria-label={showGuestPwd ? 'Hide password' : 'Show password'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showGuestPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                <span>Prefer ordering directly on WhatsApp?</span>
+                <a
+                  href={cartWaUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 hover:text-emerald-800"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>Send Cart to WhatsApp ({settings.whatsappNumber})</span>
+                </a>
               </div>
             </section>
 
@@ -607,6 +690,19 @@ export const CheckoutPage: React.FC = () => {
               <p className="text-[11px] text-slate-500 pt-1">
                 Rewards: Earn <strong className="text-navy-900 tabular-nums">+{estimatedLoyaltyPoints} Loyalty Points</strong> upon payment verification.
               </p>
+              <div className="pt-2">
+                <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                  Affiliate / Sales Agent Code (Optional)
+                </label>
+                <input
+                  type="text"
+                  maxLength={24}
+                  value={affiliateRef}
+                  onChange={(e) => captureAffiliateRef(e.target.value)}
+                  placeholder="e.g. DLR-AB12"
+                  className="w-full px-2.5 py-1.5 text-xs font-mono uppercase bg-white border border-slate-200 rounded-lg"
+                />
+              </div>
             </div>
 
             <button

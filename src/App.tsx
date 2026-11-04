@@ -5,7 +5,7 @@
 
 import React, { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { StoreProvider } from './context/StoreContext';
+import { StoreProvider, useStore } from './context/StoreContext';
 import { Layout } from './components/Layout';
 import { HomePage } from './pages/HomePage';
 import { CatalogPage } from './pages/CatalogPage';
@@ -15,16 +15,29 @@ import { CheckoutPage } from './pages/CheckoutPage';
 import { QuotationPage } from './pages/QuotationPage';
 import { AboutPage, ContactPage, PartnershipsPage, ServicesPage } from './pages/CorporatePages';
 import { AccountPage } from './pages/AccountPage';
+import { AffiliatePage } from './pages/AffiliatePage';
 import { AdminDashboardPage } from './pages/AdminDashboardPage';
 
-const RouteSeoUpdater: React.FC = () => {
-  const { pathname } = useLocation();
+const RouteSeoAndReferralUpdater: React.FC = () => {
+  const { pathname, search } = useLocation();
+  const { captureAffiliateRef } = useStore();
+
+  useEffect(() => {
+    if (search) {
+      const params = new URLSearchParams(search);
+      const refCode = params.get('ref');
+      if (refCode && refCode.trim().length >= 4) {
+        captureAffiliateRef(refCode);
+      }
+    }
+  }, [search, captureAffiliateRef]);
 
   useEffect(() => {
     const baseTitle = 'Delarico Merchandise & Supplies';
     const routeTitles: Record<string, string> = {
-      '/': `${baseTitle} – Building Materials, Timber & Hardware in Siaya, Kenya`,
+      '/': `${baseTitle} – Online Hardware, Cement, Mabati & Timber Store in Kenya`,
       '/products': `Shop Building Materials & Hardware | ${baseTitle}`,
+      '/affiliates': `Affiliate Program – Earn 3%–5% Commission | ${baseTitle}`,
       '/compare': `Compare Material Specifications | ${baseTitle}`,
       '/checkout': `Checkout | ${baseTitle}`,
       '/request-quote': `Request Project Quotation (BOQ) | ${baseTitle}`,
@@ -39,7 +52,7 @@ const RouteSeoUpdater: React.FC = () => {
     document.title =
       routeTitles[pathname] ||
       (pathname.startsWith('/product/')
-        ? `Material Details & Pricing | ${baseTitle}`
+        ? `Buy Online – Material Details & Pricing | ${baseTitle}`
         : `${baseTitle} – Built on Quality. Driven by Trust.`);
   }, [pathname]);
 
@@ -50,12 +63,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <StoreProvider>
-        <RouteSeoUpdater />
+        <RouteSeoAndReferralUpdater />
         <Layout>
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/products" element={<CatalogPage />} />
             <Route path="/product/:slug" element={<ProductDetailPage />} />
+            <Route path="/affiliates" element={<AffiliatePage />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/checkout" element={<CheckoutPage />} />
             <Route path="/request-quote" element={<QuotationPage />} />

@@ -120,6 +120,7 @@ export interface Order {
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus;
   notes: string;
+  affiliateCode?: string;
   createdAt?: Timestamp | string;
   updatedAt?: Timestamp | string;
 }
@@ -276,4 +277,39 @@ export interface CartItem {
 export interface QuoteDraftItem {
   product: Product;
   quantity: number;
+}
+
+export interface AffiliateProfile {
+  id: string;
+  uid: string;
+  affiliateCode: string;
+  displayName: string;
+  mpesaPhone: string;
+  commissionRatePct: number;
+  totalClicks: number;
+  totalReferrals: number;
+  totalSalesKes: number;
+  pendingCommissionKes: number;
+  availableCommissionKes: number;
+  paidCommissionKes: number;
+  payoutRequested: boolean;
+  status: 'active' | 'suspended';
+  createdAt?: Timestamp | string;
+  updatedAt?: Timestamp | string;
+}
+
+export interface AffiliateReferral {
+  id: string;
+  affiliateUid: string;
+  affiliateCode: string;
+  affiliateName: string;
+  orderId: string;
+  orderNumber: string;
+  buyerFirstName: string;
+  orderTotalKes: number;
+  commissionRatePct: number;
+  commissionKes: number;
+  status: 'pending' | 'approved' | 'paid' | 'cancelled';
+  createdAt?: Timestamp | string;
+  updatedAt?: Timestamp | string;
 }

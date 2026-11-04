@@ -84,6 +84,8 @@ interface StoreContextValue {
   refreshAccountSession: () => Promise<void>;
   apiFetch: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
   logout: () => Promise<void>;
+  affiliateRef: string;
+  captureAffiliateRef: (code: string) => void;
   toasts: ToastNotice[];
   notify: (message: string, tone?: 'success' | 'info' | 'error') => void;
   dismissToast: (id: string) => void;
@@ -96,6 +98,7 @@ const CART_STORAGE_KEY = 'delarico_cart_v1';
 const QUOTE_STORAGE_KEY = 'delarico_quote_v1';
 const COMPARE_STORAGE_KEY = 'delarico_compare_v1';
 const GUEST_FAV_KEY = 'delarico_guest_fav_v1';
+const AFFILIATE_REF_KEY = 'delarico_affiliate_ref_v1';
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [authToken, setAuthToken] = useState<string | null>(() => {
@@ -157,6 +160,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
+  const [affiliateRef, setAffiliateRef] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const fromUrl = (params.get('ref') || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+      if (fromUrl.length >= 4) {
+        localStorage.setItem(AFFILIATE_REF_KEY, fromUrl);
+        return fromUrl;
+      }
+      return localStorage.getItem(AFFILIATE_REF_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+
   const [toasts, setToasts] = useState<ToastNotice[]>([]);
 
   const notify = useCallback((message: string, tone: 'success' | 'info' | 'error' = 'info') => {
@@ -177,8 +194,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (!headers.has('Content-Type') && init.body) {
         headers.set('Content-Type', 'application/json');
       }
-      if (authToken) {
-        headers.set('Authorization', `Bearer ${authToken}`);
+      const activeToken =
+        authToken ||
+        (() => {
+          try {
+            return localStorage.getItem(AUTH_TOKEN_KEY);
+          } catch {
+            return null;
+          }
+        })();
+      if (activeToken) {
+        headers.set('Authorization', `Bearer ${activeToken}`);
       }
       const res = await fetch(path, { ...init, headers });
       const data = await res.json().catch(() => ({}));
@@ -346,6 +372,37 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     localStorage.setItem(GUEST_FAV_KEY, JSON.stringify(guestFavIds));
   }, [guestFavIds]);
+
+  const captureAffiliateRef = useCallback((rawCode: string) => {
+    const clean = rawCode.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+    if (clean.length < 4 && clean.length !== 0) return;
+    setAffiliateRef(clean);
+    try {
+      if (clean) {
+        localStorage.setItem(AFFILIATE_REF_KEY, clean);
+      } else {
+        localStorage.removeItem(AFFILIATE_REF_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!affiliateRef || affiliateRef.length < 4) return;
+    const sessionKey = `delarico_tracked_click_${affiliateRef}`;
+    try {
+      if (sessionStorage.getItem(sessionKey)) return;
+      sessionStorage.setItem(sessionKey, '1');
+    } catch {
+      // ignore
+    }
+    void fetch('/api/affiliates/track-click', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: affiliateRef }),
+    }).catch(() => {});
+  }, [affiliateRef]);
 
   const cart: CartItem[] = useMemo(() => {
     return cartSnapshotIds
@@ -645,6 +702,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         refreshAccountSession,
         apiFetch,
         logout,
+        affiliateRef,
+        captureAffiliateRef,
         toasts,
         notify,
         dismissToast,

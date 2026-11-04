@@ -81,6 +81,14 @@ const assertions: SecurityAssertion[] = [
     name: 'Payload 12 — Wraps order update block with isValidOrder(incoming()) to block value poisoning',
     verify: (r) => r.includes('allow update: if isValidId(orderId) && isValidOrder(incoming())'),
   },
+  {
+    id: 13,
+    name: 'Payload 13 — Enforces 3-5% affiliate commission bounds, zeroed initial balances, and terminal referral locking',
+    verify: (r) =>
+      r.includes('data.commissionRatePct >= 3 && data.commissionRatePct <= 5') &&
+      r.includes('incoming().availableCommissionKes == 0') &&
+      r.includes("existing().status != 'paid'"),
+  },
 ];
 
 const targetFile = process.argv[2] || 'firestore.rules';

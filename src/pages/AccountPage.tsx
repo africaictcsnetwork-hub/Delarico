@@ -73,9 +73,10 @@ export const AccountPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirectParam = searchParams.get('redirect') || '';
+  const initialMode = searchParams.get('mode') === 'register' ? 'register' : 'login';
 
-  // Auth form state (Sign In vs Create Account)
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  // Auth form state (Sign In vs Quick Create Account)
+  const [authMode, setAuthMode] = useState<'login' | 'register'>(initialMode);
   const [loginPhone, setLoginPhone] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -84,10 +85,17 @@ export const AccountPage: React.FC = () => {
   const [regName, setRegName] = useState('');
   const [regPhone, setRegPhone] = useState('');
   const [regPassword, setRegPassword] = useState('');
+  const [showOptionalBusiness, setShowOptionalBusiness] = useState(false);
   const [regEmail, setRegEmail] = useState('');
   const [regAccountType, setRegAccountType] = useState<AccountType>('individual');
   const [regCompany, setRegCompany] = useState('');
   const [regRef, setRegRef] = useState('');
+
+  useEffect(() => {
+    const modeParam = searchParams.get('mode');
+    if (modeParam === 'register') setAuthMode('register');
+    else if (modeParam === 'login') setAuthMode('login');
+  }, [searchParams]);
 
   // Signed-in Customer Portal state
   const [activeTab, setActiveTab] = useState<AccountTab>('orders');
@@ -522,131 +530,160 @@ export const AccountPage: React.FC = () => {
               ) : (
                 <form onSubmit={handleRegisterSubmit} className="space-y-4">
                   <div>
-                    <h2 className="text-xl font-bold text-slate-900">Create Customer Account</h2>
+                    <h2 className="text-xl font-bold text-slate-900">Quick 10-Second Account</h2>
                     <p className="text-sm text-slate-600 mt-1">
-                      Register in seconds using your Kenyan mobile number.
+                      Just enter your name, phone number, and a simple password or 4-digit PIN.
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Full Name *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={regName}
-                        onChange={(e) => setRegName(e.target.value)}
-                        placeholder="e.g. Jane Onyango"
-                        className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Phone Number *
-                      </label>
-                      <input
-                        type="tel"
-                        required
-                        value={regPhone}
-                        onChange={(e) => setRegPhone(e.target.value)}
-                        placeholder="e.g. 0712 345 678"
-                        className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
-                      />
-                    </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Your Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      autoComplete="name"
+                      value={regName}
+                      onChange={(e) => setRegName(e.target.value)}
+                      placeholder="e.g. Jane Onyango"
+                      className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
+                    />
                   </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Create Password *
-                      </label>
-                      <div className="relative">
-                        <input
-                          type={showPassword ? 'text' : 'password'}
-                          required
-                          minLength={6}
-                          value={regPassword}
-                          onChange={(e) => setRegPassword(e.target.value)}
-                          placeholder="At least 6 characters"
-                          className="w-full pl-3.5 pr-10 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword((v) => !v)}
-                          aria-label={showPassword ? 'Hide password' : 'Show password'}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-1"
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Account Category
-                      </label>
-                      <select
-                        value={regAccountType}
-                        onChange={(e) => setRegAccountType(e.target.value as AccountType)}
-                        className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
-                      >
-                        <option value="individual">Individual Homebuilder</option>
-                        <option value="contractor">Contractor / Builder</option>
-                        <option value="institution">School / Institution / NGO</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {regAccountType !== 'individual' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">
-                          Company or Institution Name
-                        </label>
-                        <input
-                          type="text"
-                          value={regCompany}
-                          onChange={(e) => setRegCompany(e.target.value)}
-                          placeholder="Registered organization name"
-                          className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">
-                          NCA / Registration Ref (Optional)
-                        </label>
-                        <input
-                          type="text"
-                          value={regRef}
-                          onChange={(e) => setRegRef(e.target.value)}
-                          placeholder="e.g. NCA-6"
-                          className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
-                        />
-                      </div>
-                    </div>
-                  )}
 
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Email Address (Optional, for digital invoices)
+                      Phone Number *
                     </label>
                     <input
-                      type="email"
-                      value={regEmail}
-                      onChange={(e) => setRegEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
+                      type="tel"
+                      required
+                      autoComplete="tel"
+                      value={regPhone}
+                      onChange={(e) => setRegPhone(e.target.value)}
+                      placeholder="e.g. 0712 345 678"
+                      className="w-full px-3.5 py-2.5 text-sm tabular-nums bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Create Password or PIN *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={4}
+                        autoComplete="new-password"
+                        value={regPassword}
+                        onChange={(e) => setRegPassword(e.target.value)}
+                        placeholder="At least 4 characters (e.g. 4-digit PIN)"
+                        className="w-full pl-3.5 pr-10 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-1"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowOptionalBusiness((v) => !v)}
+                      className="text-xs font-semibold text-royal-700 hover:text-navy-900"
+                    >
+                      {showOptionalBusiness
+                        ? '− Hide optional contractor / company details'
+                        : '+ Buying for a contractor, company, or school? (Optional)'}
+                    </button>
+
+                    {showOptionalBusiness && (
+                      <div className="mt-3 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-slate-700 mb-1">
+                              Account Type
+                            </label>
+                            <select
+                              value={regAccountType}
+                              onChange={(e) => setRegAccountType(e.target.value as AccountType)}
+                              className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
+                            >
+                              <option value="individual">Individual Homebuilder</option>
+                              <option value="contractor">Contractor / Builder</option>
+                              <option value="institution">School / Institution / NGO</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-slate-700 mb-1">
+                              Email (Optional)
+                            </label>
+                            <input
+                              type="email"
+                              value={regEmail}
+                              onChange={(e) => setRegEmail(e.target.value)}
+                              placeholder="you@example.com"
+                              className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
+                            />
+                          </div>
+                        </div>
+
+                        {regAccountType !== 'individual' && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-medium text-slate-700 mb-1">
+                                Company / Institution Name
+                              </label>
+                              <input
+                                type="text"
+                                value={regCompany}
+                                onChange={(e) => setRegCompany(e.target.value)}
+                                placeholder="Organization name"
+                                className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-slate-700 mb-1">
+                                NCA / Ref (Optional)
+                              </label>
+                              <input
+                                type="text"
+                                value={regRef}
+                                onChange={(e) => setRegRef(e.target.value)}
+                                placeholder="e.g. NCA-6"
+                                className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-royal-600"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <button
                     type="submit"
                     disabled={authSubmitting}
-                    className="w-full py-3 px-6 text-sm font-semibold text-white bg-navy-900 rounded-lg hover:bg-royal-700 transition-colors disabled:opacity-50"
+                    className="w-full py-3 px-6 text-sm font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 transition-colors disabled:opacity-50"
                   >
-                    {authSubmitting ? 'Creating Account...' : 'Create Account & Continue'}
+                    {authSubmitting ? 'Creating Account...' : 'Create Account'}
                   </button>
+
+                  <p className="text-xs text-center text-slate-500 pt-1">
+                    Already have an account?{' '}
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode('login')}
+                      className="font-semibold text-royal-700 hover:underline"
+                    >
+                      Sign In
+                    </button>
+                  </p>
                 </form>
               )}
             </div>

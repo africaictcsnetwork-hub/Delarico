@@ -116,3 +116,31 @@ export function buildQuotationWhatsAppMessage(params: {
     .filter(Boolean)
     .join('\n');
 }
+
+export function getProductCommissionRatePct(categoryId: string, baseRatePct: number = 3): number {
+  let categoryRate = 3;
+  if (categoryId === 'cat-hardware-tools' || categoryId === 'cat-general-merchandise') {
+    categoryRate = 5;
+  } else if (
+    categoryId === 'cat-timber-wood' ||
+    categoryId === 'cat-doors-windows' ||
+    categoryId === 'cat-construction-supplies'
+  ) {
+    categoryRate = 4;
+  } else {
+    categoryRate = 3;
+  }
+  return Math.min(5, Math.max(3, Math.max(categoryRate, baseRatePct)));
+}
+
+export function buildAffiliateShareMessage(product: Product, referralUrl: string): string {
+  return [
+    `🔥 *${product.name}* — Genuine Stock at DELARICO MERCHANDISE & SUPPLIES!`,
+    `💰 Retail Price: *${formatKes(product.priceKes)}* per ${product.unit}`,
+    `📦 Wholesale Rate: *${formatKes(product.wholesalePriceKes)}* (${product.minWholesaleQty}+ ${product.unit}s)`,
+    `🚚 Fast Lorry Delivery Across Siaya, Bondo, Ugunja & Western Kenya.`,
+    '',
+    `Order directly using my link below:`,
+    referralUrl,
+  ].join('\n');
+}

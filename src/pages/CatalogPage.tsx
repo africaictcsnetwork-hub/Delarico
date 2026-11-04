@@ -85,7 +85,36 @@ export const CatalogPage: React.FC = () => {
         )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-8">
+      {/* Quick 1-Tap Category Filter Bar (Mobile & Desktop Friendly) */}
+      <div className="pt-5 pb-2 flex items-center gap-2 overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => setCategoryFilter('all')}
+          className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+            selectedCategory === 'all'
+              ? 'bg-navy-900 text-white'
+              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+          }`}
+        >
+          All Materials
+        </button>
+        {categories.map((cat) => (
+          <button
+            key={cat.id}
+            type="button"
+            onClick={() => setCategoryFilter(cat.id)}
+            className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+              selectedCategory === cat.id
+                ? 'bg-navy-900 text-white'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            {cat.name}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-6">
         {/* Sidebar Filters */}
         <aside className="lg:col-span-3 space-y-6">
           <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-5">
