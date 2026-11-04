@@ -1,0 +1,6 @@
+{
+  "name": "Delarico Merchandise & Supplies – Construction Materials & Hardware",
+  "description": "Shop construction materials, timber, hardware, doors, windows, and bulk building supplies in Siaya, Kenya. Built on Quality. Driven by Trust.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

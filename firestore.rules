@@ -1,0 +1,879 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Hardened Global Primitives
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Zero-lookup admin check safe for O(1) list query evaluation (Pillar 8 Cost-Optimization)
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() &&
+        request.auth.token.email is string &&
+        request.auth.token.email == 'calvincewise@gmail.com';
+    }
+
+    // Full admin check for single-document reads and mutations
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Atomic single-batch server write capability check (non-readable, replay-proof via request.time)
+    function hasServerWriteGate(gateKey) {
+      return existsAfter(/databases/$(database)/documents/writeTickets/$(gateKey)) &&
+        getAfter(/databases/$(database)/documents/writeTickets/$(gateKey)).data.authorizedAt == request.time;
+    }
+
+    // O(1) server vault capability check for list queries on server-isolated documents
+    function hasServerVaultRead() {
+      return 'vaultKey' in existing() &&
+        existing().vaultKey is string &&
+        existing().vaultKey == '3e8a1d74c29b50f6814e2a9c7d53b08f62419c8e3a75d1b4902f6c8a3e71d54b';
+    }
+
+    function hasValidOptionalVaultKey(data) {
+      return !('vaultKey' in data) || (
+        data.vaultKey is string &&
+        data.vaultKey.size() == 64 &&
+        data.vaultKey == '3e8a1d74c29b50f6814e2a9c7d53b08f62419c8e3a75d1b4902f6c8a3e71d54b'
+      );
+    }
+
+    // =========================================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidWriteTicket(data) {
+      return data.keys().hasAll(['seal', 'targetPath', 'authorizedAt']) &&
+        data.keys().hasOnly(['seal', 'targetPath', 'authorizedAt']) &&
+        data.seal is string && data.seal.size() == 64 &&
+        data.targetPath is string && data.targetPath.size() >= 2 && data.targetPath.size() <= 200 &&
+        data.authorizedAt is timestamp;
+    }
+
+    function isValidAuthAccount(data) {
+      return data.keys().hasAll(['uid', 'normalizedPhone', 'passwordSalt', 'passwordHash', 'vaultKey', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'normalizedPhone', 'passwordSalt', 'passwordHash', 'vaultKey', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.normalizedPhone is string && data.normalizedPhone.size() >= 8 && data.normalizedPhone.size() <= 20 && data.normalizedPhone.matches('^\\+[0-9]+$') &&
+        data.passwordSalt is string && data.passwordSalt.size() >= 32 && data.passwordSalt.size() <= 64 && data.passwordSalt.matches('^[a-f0-9]+$') &&
+        data.passwordHash is string && data.passwordHash.size() >= 64 && data.passwordHash.size() <= 128 && data.passwordHash.matches('^[a-f0-9]+$') &&
+        data.vaultKey is string && data.vaultKey.size() == 64 &&
+        data.vaultKey == '3e8a1d74c29b50f6814e2a9c7d53b08f62419c8e3a75d1b4902f6c8a3e71d54b' &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'role', 'createdAt']) &&
+        isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.role is string && data.role in ['super_admin', 'manager', 'inventory_clerk'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['name', 'slug', 'description', 'imageUrl', 'sortOrder', 'isActive', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'slug', 'description', 'imageUrl', 'sortOrder', 'isActive', 'createdAt', 'updatedAt']) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
+        data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 100 && data.slug.matches('^[a-z0-9\\-]+$') &&
+        data.description is string && data.description.size() >= 5 && data.description.size() <= 500 &&
+        data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 120000 &&
+        data.sortOrder is number &&
+        data.isActive is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+          'name', 'slug', 'sku', 'categoryId', 'categoryName', 'description',
+          'specSummary', 'dimensions', 'brand', 'unit', 'priceKes', 'wholesalePriceKes',
+          'minWholesaleQty', 'compareAtPriceKes', 'stockQty', 'lowStockThreshold',
+          'weightKg', 'images', 'featured', 'bestSeller', 'onPromotion', 'promoLabel',
+          'isActive', 'ratingAvg', 'reviewCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'name', 'slug', 'sku', 'categoryId', 'categoryName', 'description',
+          'specSummary', 'dimensions', 'brand', 'unit', 'priceKes', 'wholesalePriceKes',
+          'minWholesaleQty', 'compareAtPriceKes', 'stockQty', 'lowStockThreshold',
+          'weightKg', 'images', 'featured', 'bestSeller', 'onPromotion', 'promoLabel',
+          'isActive', 'ratingAvg', 'reviewCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 160 &&
+        data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 160 && data.slug.matches('^[a-z0-9\\-]+$') &&
+        data.sku is string && data.sku.size() >= 2 && data.sku.size() <= 64 && data.sku.matches('^[A-Z0-9\\-]+$') &&
+        isValidId(data.categoryId) &&
+        data.categoryName is string && data.categoryName.size() >= 2 && data.categoryName.size() <= 100 &&
+        data.description is string && data.description.size() >= 10 && data.description.size() <= 3000 &&
+        data.specSummary is string && data.specSummary.size() >= 2 && data.specSummary.size() <= 1000 &&
+        data.dimensions is string && data.dimensions.size() >= 1 && data.dimensions.size() <= 200 &&
+        data.brand is string && data.brand.size() >= 1 && data.brand.size() <= 120 &&
+        data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 40 &&
+        data.priceKes is number && data.priceKes >= 0 &&
+        data.wholesalePriceKes is number && data.wholesalePriceKes >= 0 &&
+        data.minWholesaleQty is number && data.minWholesaleQty >= 1 &&
+        data.compareAtPriceKes is number && data.compareAtPriceKes >= 0 &&
+        data.stockQty is number && data.stockQty >= 0 &&
+        data.lowStockThreshold is number && data.lowStockThreshold >= 0 &&
+        data.weightKg is number && data.weightKg >= 0 &&
+        data.images is list && data.images.size() >= 1 && data.images.size() <= 6 &&
+        data.images[0] is string && data.images[0].size() <= 120000 &&
+        data.featured is bool &&
+        data.bestSeller is bool &&
+        data.onPromotion is bool &&
+        data.promoLabel is string && data.promoLabel.size() <= 80 &&
+        data.isActive is bool &&
+        data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5 &&
+        data.reviewCount is number && data.reviewCount >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPublic(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'accountType', 'companyName', 'registrationRef',
+          'loyaltyPoints', 'wholesaleApproved', 'favouriteProductIds', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'displayName', 'accountType', 'companyName', 'registrationRef',
+          'loyaltyPoints', 'wholesaleApproved', 'favouriteProductIds', 'vaultKey', 'createdAt', 'updatedAt'
+        ]) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.accountType is string && data.accountType in ['individual', 'contractor', 'institution'] &&
+        data.companyName is string && data.companyName.size() <= 160 &&
+        data.registrationRef is string && data.registrationRef.size() <= 80 &&
+        data.loyaltyPoints is number && data.loyaltyPoints >= 0 &&
+        data.wholesaleApproved is bool &&
+        data.favouriteProductIds is list && data.favouriteProductIds.size() <= 50 &&
+        (data.favouriteProductIds.size() == 0 || (data.favouriteProductIds[0] is string && data.favouriteProductIds[0].size() <= 128)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivate(data) {
+      return data.keys().hasAll(['uid', 'email', 'phone', 'defaultCounty', 'defaultTown', 'defaultStreetAddress', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'phone', 'defaultCounty', 'defaultTown', 'defaultStreetAddress', 'vaultKey', 'updatedAt']) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.phone is string && data.phone.size() <= 30 &&
+        data.defaultCounty is string && data.defaultCounty.size() <= 80 &&
+        data.defaultTown is string && data.defaultTown.size() <= 80 &&
+        data.defaultStreetAddress is string && data.defaultStreetAddress.size() <= 250 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDeliveryAddress(data) {
+      return data.keys().hasAll(['uid', 'label', 'recipientName', 'phone', 'county', 'town', 'streetDetails', 'isDefault', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'label', 'recipientName', 'phone', 'county', 'town', 'streetDetails', 'isDefault', 'vaultKey', 'createdAt', 'updatedAt']) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.uid) &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 60 &&
+        data.recipientName is string && data.recipientName.size() >= 2 && data.recipientName.size() <= 120 &&
+        data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 30 &&
+        data.county is string && data.county.size() >= 2 && data.county.size() <= 80 &&
+        data.town is string && data.town.size() >= 2 && data.town.size() <= 80 &&
+        data.streetDetails is string && data.streetDetails.size() >= 2 && data.streetDetails.size() <= 250 &&
+        data.isDefault is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'orderNumber', 'customerId', 'customerName', 'customerPhone', 'customerEmail',
+          'accountType', 'branchId', 'deliveryCounty', 'deliveryTown', 'deliveryAddress',
+          'deliveryMethod', 'subtotalKes', 'discountKes', 'promoCode', 'deliveryFeeKes',
+          'totalKes', 'itemCount', 'paymentMethod', 'paymentReference', 'paymentStatus',
+          'orderStatus', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'orderNumber', 'customerId', 'customerName', 'customerPhone', 'customerEmail',
+          'accountType', 'branchId', 'deliveryCounty', 'deliveryTown', 'deliveryAddress',
+          'deliveryMethod', 'subtotalKes', 'discountKes', 'promoCode', 'deliveryFeeKes',
+          'totalKes', 'itemCount', 'paymentMethod', 'paymentReference', 'paymentStatus',
+          'orderStatus', 'notes', 'vaultKey', 'createdAt', 'updatedAt'
+        ]) &&
+        hasValidOptionalVaultKey(data) &&
+        data.orderNumber is string && data.orderNumber.size() >= 4 && data.orderNumber.size() <= 40 && data.orderNumber.matches('^[A-Z0-9\\-]+$') &&
+        isValidId(data.customerId) &&
+        data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120 &&
+        data.customerPhone is string && data.customerPhone.size() >= 7 && data.customerPhone.size() <= 30 &&
+        data.customerEmail is string && data.customerEmail.size() >= 3 && data.customerEmail.size() <= 254 &&
+        data.accountType is string && data.accountType in ['individual', 'contractor', 'institution'] &&
+        isValidId(data.branchId) &&
+        data.deliveryCounty is string && data.deliveryCounty.size() >= 2 && data.deliveryCounty.size() <= 80 &&
+        data.deliveryTown is string && data.deliveryTown.size() >= 2 && data.deliveryTown.size() <= 80 &&
+        data.deliveryAddress is string && data.deliveryAddress.size() >= 2 && data.deliveryAddress.size() <= 300 &&
+        data.deliveryMethod is string && data.deliveryMethod in ['pickup', 'local_siaya', 'regional_nyanza', 'countrywide_freight'] &&
+        data.subtotalKes is number && data.subtotalKes >= 0 &&
+        data.discountKes is number && data.discountKes >= 0 &&
+        data.promoCode is string && data.promoCode.size() <= 40 &&
+        data.deliveryFeeKes is number && data.deliveryFeeKes >= 0 &&
+        data.totalKes is number && data.totalKes >= 0 &&
+        data.itemCount is number && data.itemCount >= 1 && data.itemCount <= 200 &&
+        data.paymentMethod is string && data.paymentMethod in ['mpesa_stk', 'mpesa_paybill', 'mpesa_till', 'bank_transfer', 'cod'] &&
+        data.paymentReference is string && data.paymentReference.size() <= 100 &&
+        data.paymentStatus is string && data.paymentStatus in ['pending_verification', 'verified_paid', 'failed', 'refunded'] &&
+        data.orderStatus is string && data.orderStatus in ['pending', 'confirmed', 'processing', 'dispatched', 'delivered', 'cancelled'] &&
+        data.notes is string && data.notes.size() <= 1000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrderItem(data) {
+      return data.keys().hasAll(['orderId', 'customerId', 'productId', 'productName', 'sku', 'unit', 'quantity', 'unitPriceKes', 'lineTotalKes', 'createdAt']) &&
+        data.keys().hasOnly(['orderId', 'customerId', 'productId', 'productName', 'sku', 'unit', 'quantity', 'unitPriceKes', 'lineTotalKes', 'vaultKey', 'createdAt']) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.orderId) &&
+        isValidId(data.customerId) &&
+        isValidId(data.productId) &&
+        data.productName is string && data.productName.size() >= 2 && data.productName.size() <= 160 &&
+        data.sku is string && data.sku.size() >= 2 && data.sku.size() <= 64 &&
+        data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 40 &&
+        data.quantity is number && data.quantity >= 1 &&
+        data.unitPriceKes is number && data.unitPriceKes >= 0 &&
+        data.lineTotalKes is number && data.lineTotalKes >= 0 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidQuotation(data) {
+      return data.keys().hasAll([
+          'quoteNumber', 'customerId', 'contactName', 'companyName', 'phone', 'email',
+          'deliveryLocation', 'projectType', 'instructions', 'itemCount',
+          'estimatedSubtotalKes', 'quotedTotalKes', 'adminResponseNotes', 'validUntil',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'quoteNumber', 'customerId', 'contactName', 'companyName', 'phone', 'email',
+          'deliveryLocation', 'projectType', 'instructions', 'itemCount',
+          'estimatedSubtotalKes', 'quotedTotalKes', 'adminResponseNotes', 'validUntil',
+          'status', 'vaultKey', 'createdAt', 'updatedAt'
+        ]) &&
+        hasValidOptionalVaultKey(data) &&
+        data.quoteNumber is string && data.quoteNumber.size() >= 4 && data.quoteNumber.size() <= 40 && data.quoteNumber.matches('^[A-Z0-9\\-]+$') &&
+        isValidId(data.customerId) &&
+        data.contactName is string && data.contactName.size() >= 2 && data.contactName.size() <= 120 &&
+        data.companyName is string && data.companyName.size() <= 160 &&
+        data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 30 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.deliveryLocation is string && data.deliveryLocation.size() >= 2 && data.deliveryLocation.size() <= 250 &&
+        data.projectType is string && data.projectType.size() >= 2 && data.projectType.size() <= 100 &&
+        data.instructions is string && data.instructions.size() <= 1500 &&
+        data.itemCount is number && data.itemCount >= 1 && data.itemCount <= 200 &&
+        data.estimatedSubtotalKes is number && data.estimatedSubtotalKes >= 0 &&
+        data.quotedTotalKes is number && data.quotedTotalKes >= 0 &&
+        data.adminResponseNotes is string && data.adminResponseNotes.size() <= 1500 &&
+        data.validUntil is string && data.validUntil.size() <= 40 &&
+        data.status is string && data.status in ['submitted', 'quoted', 'accepted', 'declined'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidQuotationItem(data) {
+      return data.keys().hasAll(['quotationId', 'customerId', 'productId', 'productName', 'unit', 'quantity', 'unitPriceKes', 'createdAt']) &&
+        data.keys().hasOnly(['quotationId', 'customerId', 'productId', 'productName', 'unit', 'quantity', 'unitPriceKes', 'vaultKey', 'createdAt']) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.quotationId) &&
+        isValidId(data.customerId) &&
+        isValidId(data.productId) &&
+        data.productName is string && data.productName.size() >= 2 && data.productName.size() <= 160 &&
+        data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 40 &&
+        data.quantity is number && data.quantity >= 1 &&
+        data.unitPriceKes is number && data.unitPriceKes >= 0 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidReview(data) {
+      return data.keys().hasAll(['productId', 'productName', 'customerId', 'customerName', 'rating', 'title', 'comment', 'verifiedBuyer', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['productId', 'productName', 'customerId', 'customerName', 'rating', 'title', 'comment', 'verifiedBuyer', 'status', 'createdAt', 'updatedAt']) &&
+        isValidId(data.productId) &&
+        data.productName is string && data.productName.size() >= 2 && data.productName.size() <= 160 &&
+        isValidId(data.customerId) &&
+        data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120 &&
+        data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+        data.title is string && data.title.size() >= 2 && data.title.size() <= 120 &&
+        data.comment is string && data.comment.size() >= 5 && data.comment.size() <= 1500 &&
+        data.verifiedBuyer is bool &&
+        data.status is string && data.status in ['published', 'hidden'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEnquiry(data) {
+      return data.keys().hasAll(['customerId', 'enquiryType', 'name', 'companyName', 'phone', 'email', 'subject', 'message', 'status', 'adminReply', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['customerId', 'enquiryType', 'name', 'companyName', 'phone', 'email', 'subject', 'message', 'status', 'adminReply', 'vaultKey', 'createdAt', 'updatedAt']) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.customerId) &&
+        data.enquiryType is string && data.enquiryType in ['general', 'bulk_sourcing', 'supplier_partnership', 'contractor_onboarding'] &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        data.companyName is string && data.companyName.size() <= 160 &&
+        data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 30 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 160 &&
+        data.message is string && data.message.size() >= 5 && data.message.size() <= 2000 &&
+        data.status is string && data.status in ['open', 'in_review', 'resolved'] &&
+        data.adminReply is string && data.adminReply.size() <= 1500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPromotion(data) {
+      return data.keys().hasAll(['code', 'title', 'description', 'discountType', 'discountValue', 'minOrderKes', 'isActive', 'expiresAt', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['code', 'title', 'description', 'discountType', 'discountValue', 'minOrderKes', 'isActive', 'expiresAt', 'createdAt', 'updatedAt']) &&
+        data.code is string && data.code.size() >= 3 && data.code.size() <= 32 && data.code.matches('^[A-Z0-9\\-]+$') &&
+        data.title is string && data.title.size() >= 2 && data.title.size() <= 120 &&
+        data.description is string && data.description.size() >= 5 && data.description.size() <= 400 &&
+        data.discountType is string && data.discountType in ['percentage', 'fixed_kes'] &&
+        data.discountValue is number && data.discountValue > 0 &&
+        data.minOrderKes is number && data.minOrderKes >= 0 &&
+        data.isActive is bool &&
+        data.expiresAt is string && data.expiresAt.size() <= 40 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStockMovement(data) {
+      return data.keys().hasAll(['productId', 'productName', 'sku', 'movementType', 'quantityDelta', 'previousStock', 'newStock', 'reason', 'performedByUid', 'createdAt']) &&
+        data.keys().hasOnly(['productId', 'productName', 'sku', 'movementType', 'quantityDelta', 'previousStock', 'newStock', 'reason', 'performedByUid', 'vaultKey', 'createdAt']) &&
+        hasValidOptionalVaultKey(data) &&
+        isValidId(data.productId) &&
+        data.productName is string && data.productName.size() >= 2 && data.productName.size() <= 160 &&
+        data.sku is string && data.sku.size() >= 2 && data.sku.size() <= 64 &&
+        data.movementType is string && data.movementType in ['restock', 'sale', 'adjustment', 'return'] &&
+        data.quantityDelta is number &&
+        data.previousStock is number && data.previousStock >= 0 &&
+        data.newStock is number && data.newStock >= 0 &&
+        data.reason is string && data.reason.size() >= 2 && data.reason.size() <= 300 &&
+        isValidId(data.performedByUid) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidBranch(data) {
+      return data.keys().hasAll(['name', 'code', 'county', 'town', 'address', 'phone', 'managerName', 'deliveryZones', 'isHeadquarters', 'isActive', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'code', 'county', 'town', 'address', 'phone', 'managerName', 'deliveryZones', 'isHeadquarters', 'isActive', 'createdAt', 'updatedAt']) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        data.code is string && data.code.size() >= 2 && data.code.size() <= 24 && data.code.matches('^[A-Z0-9\\-]+$') &&
+        data.county is string && data.county.size() >= 2 && data.county.size() <= 80 &&
+        data.town is string && data.town.size() >= 2 && data.town.size() <= 80 &&
+        data.address is string && data.address.size() >= 5 && data.address.size() <= 250 &&
+        data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 30 &&
+        data.managerName is string && data.managerName.size() >= 2 && data.managerName.size() <= 120 &&
+        data.deliveryZones is string && data.deliveryZones.size() >= 2 && data.deliveryZones.size() <= 300 &&
+        data.isHeadquarters is bool &&
+        data.isActive is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStoreSettings(data) {
+      return data.keys().hasAll([
+          'businessName', 'tagline', 'location', 'whatsappNumber', 'email', 'website',
+          'mpesaPaybillNumber', 'mpesaAccountPrefix', 'mpesaTillNumber', 'mpesaStkEnabled',
+          'bankName', 'bankAccountName', 'bankAccountNumber', 'bankBranch',
+          'codEnabled', 'freeDeliveryThresholdKes', 'loyaltyPointsPer1000Kes', 'isPublic', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'businessName', 'tagline', 'location', 'whatsappNumber', 'email', 'website',
+          'mpesaPaybillNumber', 'mpesaAccountPrefix', 'mpesaTillNumber', 'mpesaStkEnabled',
+          'bankName', 'bankAccountName', 'bankAccountNumber', 'bankBranch',
+          'codEnabled', 'freeDeliveryThresholdKes', 'loyaltyPointsPer1000Kes', 'isPublic', 'updatedAt'
+        ]) &&
+        data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 160 &&
+        data.tagline is string && data.tagline.size() >= 2 && data.tagline.size() <= 160 &&
+        data.location is string && data.location.size() >= 2 && data.location.size() <= 160 &&
+        data.whatsappNumber is string && data.whatsappNumber.size() >= 7 && data.whatsappNumber.size() <= 30 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.website is string && data.website.size() >= 3 && data.website.size() <= 160 &&
+        data.mpesaPaybillNumber is string && data.mpesaPaybillNumber.size() <= 30 &&
+        data.mpesaAccountPrefix is string && data.mpesaAccountPrefix.size() <= 30 &&
+        data.mpesaTillNumber is string && data.mpesaTillNumber.size() <= 30 &&
+        data.mpesaStkEnabled is bool &&
+        data.bankName is string && data.bankName.size() <= 120 &&
+        data.bankAccountName is string && data.bankAccountName.size() <= 160 &&
+        data.bankAccountNumber is string && data.bankAccountNumber.size() <= 60 &&
+        data.bankBranch is string && data.bankBranch.size() <= 120 &&
+        data.codEnabled is bool &&
+        data.freeDeliveryThresholdKes is number && data.freeDeliveryThresholdKes >= 0 &&
+        data.loyaltyPointsPer1000Kes is number && data.loyaltyPointsPer1000Kes >= 0 &&
+        data.isPublic is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection Match Blocks
+    // =========================================================================
+
+    match /writeTickets/{gateKey} {
+      allow get: if false;
+      allow list: if false;
+      allow create: if isValidId(gateKey) && isValidWriteTicket(incoming()) &&
+        incoming().seal == '9f4c2b8e17a65d30c84b1e729a53f6d0418c7b2e5a9163d4f08b2c7e19a45d63' &&
+        incoming().authorizedAt == request.time;
+      allow update: if isValidId(gateKey) && isValidWriteTicket(incoming()) &&
+        incoming().seal == '9f4c2b8e17a65d30c84b1e729a53f6d0418c7b2e5a9163d4f08b2c7e19a45d63' &&
+        incoming().authorizedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /authAccounts/{accountId} {
+      allow get: if false;
+      allow list: if hasServerVaultRead();
+      allow create: if isValidId(accountId) && isValidAuthAccount(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+        hasServerWriteGate('auth_' + accountId);
+      allow update: if isValidId(accountId) && isValidAuthAccount(incoming()) &&
+        incoming().uid == existing().uid && incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && hasServerWriteGate('auth_' + accountId);
+      allow delete: if isValidId(accountId) && hasServerWriteGate('auth_' + accountId);
+    }
+
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isVerifiedUser() && isValidId(adminId) && isValidAdminRecord(incoming()) &&
+        incoming().uid == adminId && incoming().createdAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(adminId) && isValidAdminRecord(incoming()) &&
+        incoming().uid == existing().uid && incoming().createdAt == existing().createdAt && isAdmin();
+      allow delete: if isAdmin() && isValidId(adminId);
+    }
+
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId) && (existing().isActive == true || isAdmin());
+      allow list: if existing().isActive == true || isBootstrappedAdmin();
+      allow create: if isValidId(categoryId) && isValidCategory(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+        (hasServerWriteGate('cat_' + categoryId) || (isVerifiedUser() && isAdmin()));
+      allow update: if isValidId(categoryId) && isValidCategory(incoming()) &&
+        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time &&
+        (hasServerWriteGate('cat_' + categoryId) || (isVerifiedUser() && isAdmin()));
+      allow delete: if isValidId(categoryId) && (hasServerWriteGate('cat_' + categoryId) || isAdmin());
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId) && (existing().isActive == true || isAdmin());
+      allow list: if existing().isActive == true || isBootstrappedAdmin();
+      allow create: if isValidId(productId) && isValidProduct(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+        (
+          exists(/databases/$(database)/documents/categories/$(incoming().categoryId)) ||
+          existsAfter(/databases/$(database)/documents/categories/$(incoming().categoryId))
+        ) &&
+        (hasServerWriteGate('prod_' + productId) || (isVerifiedUser() && isAdmin()));
+      allow update: if isValidId(productId) && isValidProduct(incoming()) &&
+        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time &&
+        (hasServerWriteGate('prod_' + productId) || (isVerifiedUser() && isAdmin()));
+      allow delete: if isValidId(productId) && (hasServerWriteGate('prod_' + productId) || isAdmin());
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && !('vaultKey' in existing()) &&
+        (request.auth.uid == userId || isAdmin());
+      allow list: if (isBootstrappedAdmin() && !('vaultKey' in existing()) && existing().uid is string) ||
+        hasServerVaultRead();
+      allow create: if isValidId(userId) && isValidUserPublic(incoming()) &&
+        incoming().loyaltyPoints == 0 && incoming().wholesaleApproved == false &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+          hasServerWriteGate('usr_' + userId) ||
+          (
+            isVerifiedUser() && !('vaultKey' in incoming()) &&
+            request.auth.uid == userId && incoming().uid == request.auth.uid
+          )
+        );
+      allow update: if isValidId(userId) && isValidUserPublic(incoming()) &&
+        incoming().uid == existing().uid && incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          hasServerWriteGate('usr_' + userId) ||
+          (
+            isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && (
+              isAdmin() ||
+              (
+                request.auth.uid == userId &&
+                incoming().loyaltyPoints == existing().loyaltyPoints &&
+                incoming().wholesaleApproved == existing().wholesaleApproved &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'displayName', 'accountType', 'companyName', 'registrationRef', 'favouriteProductIds', 'updatedAt'
+                ])
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(userId) && (hasServerWriteGate('usr_' + userId) || (isAdmin() && !('vaultKey' in existing())));
+
+      // Isolated PII Subcollection
+      match /private/{docId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(docId) &&
+          !('vaultKey' in existing()) && (request.auth.uid == userId || isAdmin());
+        allow list: if hasServerVaultRead();
+        allow create: if isValidId(userId) && isValidId(docId) && isValidUserPrivate(incoming()) &&
+          incoming().uid == userId && incoming().updatedAt == request.time &&
+          (exists(/databases/$(database)/documents/users/$(userId)) || existsAfter(/databases/$(database)/documents/users/$(userId))) && (
+            hasServerWriteGate('usrpriv_' + userId + '_' + docId) ||
+            (isVerifiedUser() && !('vaultKey' in incoming()) && (request.auth.uid == userId || isAdmin()))
+          );
+        allow update: if isValidId(userId) && isValidId(docId) && isValidUserPrivate(incoming()) &&
+          incoming().uid == existing().uid && incoming().updatedAt == request.time && (
+            hasServerWriteGate('usrpriv_' + userId + '_' + docId) ||
+            (
+              isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && (
+                isAdmin() ||
+                (
+                  request.auth.uid == userId &&
+                  exists(/databases/$(database)/documents/users/$(userId)) &&
+                  incoming().diff(existing()).affectedKeys().hasOnly([
+                    'email', 'phone', 'defaultCounty', 'defaultTown', 'defaultStreetAddress', 'updatedAt'
+                  ])
+                )
+              )
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(docId) &&
+          (hasServerWriteGate('usrpriv_' + userId + '_' + docId) || (isAdmin() && !('vaultKey' in existing())));
+      }
+
+      // Saved Delivery Addresses Subcollection
+      match /addresses/{addressId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(addressId) && !('vaultKey' in existing()) && (
+          (request.auth.uid == userId && exists(/databases/$(database)/documents/users/$(userId))) ||
+          isAdmin()
+        );
+        allow list: if (isSignedIn() && !('vaultKey' in existing()) && (
+          (request.auth.uid == userId && existing().uid == request.auth.uid) ||
+          isBootstrappedAdmin()
+        )) || hasServerVaultRead();
+        allow create: if isValidId(userId) && isValidId(addressId) && isValidDeliveryAddress(incoming()) &&
+          incoming().uid == userId &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId)) && (
+            hasServerWriteGate('usraddr_' + addressId) ||
+            (isVerifiedUser() && !('vaultKey' in incoming()) && request.auth.uid == userId)
+          );
+        allow update: if isValidId(userId) && isValidId(addressId) && isValidDeliveryAddress(incoming()) &&
+          incoming().uid == existing().uid && incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            hasServerWriteGate('usraddr_' + addressId) ||
+            (
+              isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && (
+                isAdmin() ||
+                (
+                  request.auth.uid == userId &&
+                  exists(/databases/$(database)/documents/users/$(userId)) &&
+                  incoming().diff(existing()).affectedKeys().hasOnly([
+                    'label', 'recipientName', 'phone', 'county', 'town', 'streetDetails', 'isDefault', 'updatedAt'
+                  ])
+                )
+              )
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(addressId) && (
+          hasServerWriteGate('usraddr_' + addressId) ||
+          (
+            isVerifiedUser() && !('vaultKey' in existing()) && (
+              (request.auth.uid == userId && exists(/databases/$(database)/documents/users/$(userId))) ||
+              isAdmin()
+            )
+          )
+        );
+      }
+    }
+
+    match /orders/{orderId} {
+      allow get: if isSignedIn() && isValidId(orderId) && !('vaultKey' in existing()) &&
+        (existing().customerId == request.auth.uid || isAdmin());
+      allow list: if (isSignedIn() && !('vaultKey' in existing()) && (existing().customerId == request.auth.uid || isBootstrappedAdmin())) ||
+        hasServerVaultRead();
+      allow create: if isValidId(orderId) && isValidOrder(incoming()) &&
+        incoming().paymentStatus == 'pending_verification' &&
+        incoming().orderStatus == 'pending' &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+          hasServerWriteGate('ord_' + orderId) ||
+          (
+            isVerifiedUser() && !('vaultKey' in incoming()) &&
+            incoming().customerId == request.auth.uid &&
+            (
+              exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+              existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+            )
+          )
+        );
+      allow update: if isValidId(orderId) && isValidOrder(incoming()) &&
+        incoming().customerId == existing().customerId &&
+        incoming().orderNumber == existing().orderNumber &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          hasServerWriteGate('ord_' + orderId) ||
+          (
+            isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && (
+              isAdmin() ||
+              (
+                existing().customerId == request.auth.uid &&
+                existing().orderStatus != 'delivered' &&
+                existing().orderStatus != 'cancelled' &&
+                (
+                  // Action 1: Customer cancels a pending order
+                  (
+                    existing().orderStatus == 'pending' &&
+                    incoming().orderStatus == 'cancelled' &&
+                    incoming().paymentStatus == existing().paymentStatus &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['orderStatus', 'updatedAt'])
+                  ) ||
+                  // Action 2: Customer submits payment transaction reference for admin verification
+                  (
+                    existing().paymentStatus == 'pending_verification' &&
+                    incoming().paymentStatus == 'pending_verification' &&
+                    incoming().orderStatus == existing().orderStatus &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['paymentReference', 'updatedAt'])
+                  )
+                )
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(orderId) && (hasServerWriteGate('ord_' + orderId) || (isAdmin() && !('vaultKey' in existing())));
+
+      match /items/{itemId} {
+        allow get: if isSignedIn() && isValidId(orderId) && isValidId(itemId) && !('vaultKey' in existing()) && (
+          isAdmin() ||
+          (
+            existing().customerId == request.auth.uid &&
+            get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid
+          )
+        );
+        allow list: if (isSignedIn() && !('vaultKey' in existing()) && (existing().customerId == request.auth.uid || isBootstrappedAdmin())) ||
+          hasServerVaultRead();
+        allow create: if isValidId(orderId) && isValidId(itemId) && isValidOrderItem(incoming()) &&
+          incoming().orderId == orderId &&
+          incoming().createdAt == request.time && (
+            (hasServerWriteGate('orditem_' + orderId + '_' + itemId) && exists(/databases/$(database)/documents/orders/$(orderId))) ||
+            (
+              isVerifiedUser() && !('vaultKey' in incoming()) &&
+              incoming().customerId == request.auth.uid &&
+              (
+                (exists(/databases/$(database)/documents/orders/$(orderId)) && get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid) ||
+                (existsAfter(/databases/$(database)/documents/orders/$(orderId)) && getAfter(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid)
+              )
+            )
+          );
+        allow update: if isValidId(orderId) && isValidId(itemId) && isValidOrderItem(incoming()) &&
+          incoming().orderId == existing().orderId && incoming().customerId == existing().customerId &&
+          incoming().createdAt == existing().createdAt &&
+          (hasServerWriteGate('orditem_' + orderId + '_' + itemId) || (isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && isAdmin()));
+        allow delete: if isValidId(orderId) && isValidId(itemId) &&
+          (hasServerWriteGate('orditem_' + orderId + '_' + itemId) || (isAdmin() && !('vaultKey' in existing())));
+      }
+    }
+
+    match /quotations/{quotationId} {
+      allow get: if isSignedIn() && isValidId(quotationId) && !('vaultKey' in existing()) &&
+        (existing().customerId == request.auth.uid || isAdmin());
+      allow list: if (isSignedIn() && !('vaultKey' in existing()) && (existing().customerId == request.auth.uid || isBootstrappedAdmin())) ||
+        hasServerVaultRead();
+      allow create: if isValidId(quotationId) && isValidQuotation(incoming()) &&
+        incoming().status == 'submitted' &&
+        incoming().quotedTotalKes == 0 &&
+        incoming().adminResponseNotes == '' &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+          hasServerWriteGate('qt_' + quotationId) ||
+          (isVerifiedUser() && !('vaultKey' in incoming()) && incoming().customerId == request.auth.uid)
+        );
+      allow update: if isValidId(quotationId) && isValidQuotation(incoming()) &&
+        incoming().customerId == existing().customerId &&
+        incoming().quoteNumber == existing().quoteNumber &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          hasServerWriteGate('qt_' + quotationId) ||
+          (
+            isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && (
+              isAdmin() ||
+              (
+                existing().customerId == request.auth.uid &&
+                existing().status == 'quoted' &&
+                incoming().status in ['accepted', 'declined'] &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(quotationId) && (hasServerWriteGate('qt_' + quotationId) || (isAdmin() && !('vaultKey' in existing())));
+
+      match /items/{itemId} {
+        allow get: if isSignedIn() && isValidId(quotationId) && isValidId(itemId) && !('vaultKey' in existing()) && (
+          isAdmin() ||
+          (
+            existing().customerId == request.auth.uid &&
+            get(/databases/$(database)/documents/quotations/$(quotationId)).data.customerId == request.auth.uid
+          )
+        );
+        allow list: if (isSignedIn() && !('vaultKey' in existing()) && (existing().customerId == request.auth.uid || isBootstrappedAdmin())) ||
+          hasServerVaultRead();
+        allow create: if isValidId(quotationId) && isValidId(itemId) && isValidQuotationItem(incoming()) &&
+          incoming().quotationId == quotationId &&
+          incoming().createdAt == request.time && (
+            (hasServerWriteGate('qtitem_' + quotationId + '_' + itemId) && exists(/databases/$(database)/documents/quotations/$(quotationId))) ||
+            (
+              isVerifiedUser() && !('vaultKey' in incoming()) &&
+              incoming().customerId == request.auth.uid &&
+              (
+                (exists(/databases/$(database)/documents/quotations/$(quotationId)) && get(/databases/$(database)/documents/quotations/$(quotationId)).data.customerId == request.auth.uid) ||
+                (existsAfter(/databases/$(database)/documents/quotations/$(quotationId)) && getAfter(/databases/$(database)/documents/quotations/$(quotationId)).data.customerId == request.auth.uid)
+              )
+            )
+          );
+        allow update: if isValidId(quotationId) && isValidId(itemId) && isValidQuotationItem(incoming()) &&
+          incoming().quotationId == existing().quotationId && incoming().customerId == existing().customerId &&
+          incoming().createdAt == existing().createdAt &&
+          (hasServerWriteGate('qtitem_' + quotationId + '_' + itemId) || (isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && isAdmin()));
+        allow delete: if isValidId(quotationId) && isValidId(itemId) &&
+          (hasServerWriteGate('qtitem_' + quotationId + '_' + itemId) || (isAdmin() && !('vaultKey' in existing())));
+      }
+    }
+
+    match /reviews/{reviewId} {
+      allow get: if isValidId(reviewId) && (
+        existing().status == 'published' ||
+        (isSignedIn() && existing().customerId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow list: if existing().status == 'published' ||
+        (isSignedIn() && existing().customerId == request.auth.uid) ||
+        isBootstrappedAdmin();
+      allow create: if isValidId(reviewId) && isValidReview(incoming()) &&
+        incoming().verifiedBuyer == false &&
+        incoming().status == 'published' &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+          hasServerWriteGate('rev_' + reviewId) ||
+          (
+            isVerifiedUser() &&
+            incoming().customerId == request.auth.uid &&
+            (
+              exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+              existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+            )
+          )
+        );
+      allow update: if isValidId(reviewId) && isValidReview(incoming()) &&
+        incoming().customerId == existing().customerId &&
+        incoming().productId == existing().productId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          hasServerWriteGate('rev_' + reviewId) ||
+          (
+            isVerifiedUser() && (
+              isAdmin() ||
+              (
+                existing().customerId == request.auth.uid &&
+                incoming().verifiedBuyer == existing().verifiedBuyer &&
+                incoming().status == existing().status &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'title', 'comment', 'updatedAt'])
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(reviewId) && (
+        hasServerWriteGate('rev_' + reviewId) ||
+        (isVerifiedUser() && (existing().customerId == request.auth.uid || isAdmin()))
+      );
+    }
+
+    match /enquiries/{enquiryId} {
+      allow get: if isSignedIn() && isValidId(enquiryId) && !('vaultKey' in existing()) &&
+        (existing().customerId == request.auth.uid || isAdmin());
+      allow list: if (isSignedIn() && !('vaultKey' in existing()) && (existing().customerId == request.auth.uid || isBootstrappedAdmin())) ||
+        hasServerVaultRead();
+      allow create: if isValidId(enquiryId) && isValidEnquiry(incoming()) &&
+        incoming().status == 'open' &&
+        incoming().adminReply == '' &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+          hasServerWriteGate('enq_' + enquiryId) ||
+          (isVerifiedUser() && !('vaultKey' in incoming()) && incoming().customerId == request.auth.uid)
+        );
+      allow update: if isValidId(enquiryId) && isValidEnquiry(incoming()) &&
+        incoming().customerId == existing().customerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (hasServerWriteGate('enq_' + enquiryId) || (isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && isAdmin()));
+      allow delete: if isValidId(enquiryId) && (hasServerWriteGate('enq_' + enquiryId) || (isAdmin() && !('vaultKey' in existing())));
+    }
+
+    match /promotions/{promotionId} {
+      allow get: if isValidId(promotionId) && (existing().isActive == true || isAdmin());
+      allow list: if existing().isActive == true || isBootstrappedAdmin();
+      allow create: if isValidId(promotionId) && isValidPromotion(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+        (hasServerWriteGate('promo_' + promotionId) || (isVerifiedUser() && isAdmin()));
+      allow update: if isValidId(promotionId) && isValidPromotion(incoming()) &&
+        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time &&
+        (hasServerWriteGate('promo_' + promotionId) || (isVerifiedUser() && isAdmin()));
+      allow delete: if isValidId(promotionId) && (hasServerWriteGate('promo_' + promotionId) || isAdmin());
+    }
+
+    match /stockMovements/{movementId} {
+      allow get: if isAdmin() && isValidId(movementId) && !('vaultKey' in existing());
+      allow list: if (isBootstrappedAdmin() && !('vaultKey' in existing()) && existing().productId is string) ||
+        hasServerVaultRead();
+      allow create: if isValidId(movementId) && isValidStockMovement(incoming()) &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/products/$(incoming().productId)) && (
+          hasServerWriteGate('stk_' + movementId) ||
+          (isVerifiedUser() && !('vaultKey' in incoming()) && incoming().performedByUid == request.auth.uid && isAdmin())
+        );
+      allow update: if false;
+      allow delete: if isValidId(movementId) && (hasServerWriteGate('stk_' + movementId) || (isAdmin() && !('vaultKey' in existing())));
+    }
+
+    match /branches/{branchId} {
+      allow get: if isValidId(branchId) && (existing().isActive == true || isAdmin());
+      allow list: if existing().isActive == true || isBootstrappedAdmin();
+      allow create: if isValidId(branchId) && isValidBranch(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+        (hasServerWriteGate('branch_' + branchId) || (isVerifiedUser() && isAdmin()));
+      allow update: if isValidId(branchId) && isValidBranch(incoming()) &&
+        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time &&
+        (hasServerWriteGate('branch_' + branchId) || (isVerifiedUser() && isAdmin()));
+      allow delete: if isValidId(branchId) && (hasServerWriteGate('branch_' + branchId) || isAdmin());
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && (existing().isPublic == true || isAdmin());
+      allow list: if existing().isPublic == true || isBootstrappedAdmin();
+      allow create: if isValidId(settingId) && isValidStoreSettings(incoming()) &&
+        incoming().updatedAt == request.time &&
+        (hasServerWriteGate('set_' + settingId) || (isVerifiedUser() && isAdmin()));
+      allow update: if isValidId(settingId) && isValidStoreSettings(incoming()) &&
+        incoming().updatedAt == request.time &&
+        (hasServerWriteGate('set_' + settingId) || (isVerifiedUser() && isAdmin()));
+      allow delete: if isValidId(settingId) && (hasServerWriteGate('set_' + settingId) || isAdmin());
+    }
+  }
+}

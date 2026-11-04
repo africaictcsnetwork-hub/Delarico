@@ -1,0 +1,465 @@
+{
+  "entities": {
+    "WriteTicket": {
+      "title": "WriteTicket",
+      "description": "Single-batch atomic capability gate for authorized backend server mutations.",
+      "type": "object",
+      "properties": {
+        "seal": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "targetPath": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "authorizedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seal", "targetPath", "authorizedAt"]
+    },
+    "AuthAccount": {
+      "title": "AuthAccount",
+      "description": "Server-isolated salted password hash record for phone-authenticated accounts.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "normalizedPhone": { "type": "string", "minLength": 8, "maxLength": 20, "pattern": "^\\+[0-9]+$" },
+        "passwordSalt": { "type": "string", "minLength": 32, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "passwordHash": { "type": "string", "minLength": 64, "maxLength": 128, "pattern": "^[a-f0-9]+$" },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "normalizedPhone", "passwordSalt", "passwordHash", "vaultKey", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator role assignment document.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 254 },
+        "role": { "type": "string", "enum": ["super_admin", "manager", "inventory_clerk"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Product catalogue category for construction materials and general merchandise.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "slug": { "type": "string", "minLength": 2, "maxLength": 100, "pattern": "^[a-z0-9\\-]+$" },
+        "description": { "type": "string", "minLength": 5, "maxLength": 500 },
+        "imageUrl": { "type": "string", "minLength": 1, "maxLength": 120000 },
+        "sortOrder": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "slug", "description", "imageUrl", "sortOrder", "isActive", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Construction material, timber, hardware, or merchandise item in the catalogue.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "slug": { "type": "string", "minLength": 2, "maxLength": 160, "pattern": "^[a-z0-9\\-]+$" },
+        "sku": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "categoryId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "categoryName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "description": { "type": "string", "minLength": 10, "maxLength": 3000 },
+        "specSummary": { "type": "string", "minLength": 2, "maxLength": 1000 },
+        "dimensions": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "brand": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "priceKes": { "type": "number" },
+        "wholesalePriceKes": { "type": "number" },
+        "minWholesaleQty": { "type": "number" },
+        "compareAtPriceKes": { "type": "number" },
+        "stockQty": { "type": "number" },
+        "lowStockThreshold": { "type": "number" },
+        "weightKg": { "type": "number" },
+        "images": { "type": "array", "maxLength": 6 },
+        "featured": { "type": "boolean" },
+        "bestSeller": { "type": "boolean" },
+        "onPromotion": { "type": "boolean" },
+        "promoLabel": { "type": "string", "maxLength": 80 },
+        "isActive": { "type": "boolean" },
+        "ratingAvg": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "name", "slug", "sku", "categoryId", "categoryName", "description",
+        "specSummary", "dimensions", "brand", "unit", "priceKes", "wholesalePriceKes",
+        "minWholesaleQty", "compareAtPriceKes", "stockQty", "lowStockThreshold",
+        "weightKg", "images", "featured", "bestSeller", "onPromotion", "promoLabel",
+        "isActive", "ratingAvg", "reviewCount", "createdAt", "updatedAt"
+      ]
+    },
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Non-PII customer or contractor account profile.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "accountType": { "type": "string", "enum": ["individual", "contractor", "institution"] },
+        "companyName": { "type": "string", "maxLength": 160 },
+        "registrationRef": { "type": "string", "maxLength": 80 },
+        "loyaltyPoints": { "type": "number" },
+        "wholesaleApproved": { "type": "boolean" },
+        "favouriteProductIds": { "type": "array", "maxLength": 50 },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "displayName", "accountType", "companyName", "registrationRef",
+        "loyaltyPoints", "wholesaleApproved", "favouriteProductIds", "createdAt", "updatedAt"
+      ]
+    },
+    "UserPrivateContact": {
+      "title": "UserPrivateContact",
+      "description": "Isolated PII contact details for a registered user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 254 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "defaultCounty": { "type": "string", "maxLength": 80 },
+        "defaultTown": { "type": "string", "maxLength": 80 },
+        "defaultStreetAddress": { "type": "string", "maxLength": 250 },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "phone", "defaultCounty", "defaultTown", "defaultStreetAddress", "updatedAt"]
+    },
+    "DeliveryAddress": {
+      "title": "DeliveryAddress",
+      "description": "Saved customer delivery destination.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "recipientName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phone": { "type": "string", "minLength": 7, "maxLength": 30 },
+        "county": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "town": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "streetDetails": { "type": "string", "minLength": 2, "maxLength": 250 },
+        "isDefault": { "type": "boolean" },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "label", "recipientName", "phone", "county", "town", "streetDetails", "isDefault", "createdAt", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer purchase order header with verified payment tracking.",
+      "type": "object",
+      "properties": {
+        "orderNumber": { "type": "string", "minLength": 4, "maxLength": 40, "pattern": "^[A-Z0-9\\-]+$" },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "customerPhone": { "type": "string", "minLength": 7, "maxLength": 30 },
+        "customerEmail": { "type": "string", "minLength": 3, "maxLength": 254 },
+        "accountType": { "type": "string", "enum": ["individual", "contractor", "institution"] },
+        "branchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "deliveryCounty": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "deliveryTown": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "deliveryAddress": { "type": "string", "minLength": 2, "maxLength": 300 },
+        "deliveryMethod": { "type": "string", "enum": ["pickup", "local_siaya", "regional_nyanza", "countrywide_freight"] },
+        "subtotalKes": { "type": "number" },
+        "discountKes": { "type": "number" },
+        "promoCode": { "type": "string", "maxLength": 40 },
+        "deliveryFeeKes": { "type": "number" },
+        "totalKes": { "type": "number" },
+        "itemCount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["mpesa_stk", "mpesa_paybill", "mpesa_till", "bank_transfer", "cod"] },
+        "paymentReference": { "type": "string", "maxLength": 100 },
+        "paymentStatus": { "type": "string", "enum": ["pending_verification", "verified_paid", "failed", "refunded"] },
+        "orderStatus": { "type": "string", "enum": ["pending", "confirmed", "processing", "dispatched", "delivered", "cancelled"] },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderNumber", "customerId", "customerName", "customerPhone", "customerEmail",
+        "accountType", "branchId", "deliveryCounty", "deliveryTown", "deliveryAddress",
+        "deliveryMethod", "subtotalKes", "discountKes", "promoCode", "deliveryFeeKes",
+        "totalKes", "itemCount", "paymentMethod", "paymentReference", "paymentStatus",
+        "orderStatus", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "OrderItem": {
+      "title": "OrderItem",
+      "description": "Line item within a customer purchase order subcollection.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "sku": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "quantity": { "type": "number" },
+        "unitPriceKes": { "type": "number" },
+        "lineTotalKes": { "type": "number" },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orderId", "customerId", "productId", "productName", "sku", "unit", "quantity", "unitPriceKes", "lineTotalKes", "createdAt"]
+    },
+    "QuotationRequest": {
+      "title": "QuotationRequest",
+      "description": "Bulk or project quotation request header.",
+      "type": "object",
+      "properties": {
+        "quoteNumber": { "type": "string", "minLength": 4, "maxLength": 40, "pattern": "^[A-Z0-9\\-]+$" },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "contactName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "companyName": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "minLength": 7, "maxLength": 30 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 254 },
+        "deliveryLocation": { "type": "string", "minLength": 2, "maxLength": 250 },
+        "projectType": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "instructions": { "type": "string", "maxLength": 1500 },
+        "itemCount": { "type": "number" },
+        "estimatedSubtotalKes": { "type": "number" },
+        "quotedTotalKes": { "type": "number" },
+        "adminResponseNotes": { "type": "string", "maxLength": 1500 },
+        "validUntil": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["submitted", "quoted", "accepted", "declined"] },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "quoteNumber", "customerId", "contactName", "companyName", "phone", "email",
+        "deliveryLocation", "projectType", "instructions", "itemCount",
+        "estimatedSubtotalKes", "quotedTotalKes", "adminResponseNotes", "validUntil",
+        "status", "createdAt", "updatedAt"
+      ]
+    },
+    "QuotationItem": {
+      "title": "QuotationItem",
+      "description": "Requested product line item inside a quotation subcollection.",
+      "type": "object",
+      "properties": {
+        "quotationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "quantity": { "type": "number" },
+        "unitPriceKes": { "type": "number" },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["quotationId", "customerId", "productId", "productName", "unit", "quantity", "unitPriceKes", "createdAt"]
+    },
+    "ProductReview": {
+      "title": "ProductReview",
+      "description": "Customer product rating and review.",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "rating": { "type": "number" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "comment": { "type": "string", "minLength": 5, "maxLength": 1500 },
+        "verifiedBuyer": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["published", "hidden"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "productName", "customerId", "customerName", "rating", "title", "comment", "verifiedBuyer", "status", "createdAt", "updatedAt"]
+    },
+    "CustomerEnquiry": {
+      "title": "CustomerEnquiry",
+      "description": "General customer enquiry or supplier partnership proposal.",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "enquiryType": { "type": "string", "enum": ["general", "bulk_sourcing", "supplier_partnership", "contractor_onboarding"] },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "companyName": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "minLength": 7, "maxLength": 30 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 254 },
+        "subject": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "message": { "type": "string", "minLength": 5, "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["open", "in_review", "resolved"] },
+        "adminReply": { "type": "string", "maxLength": 1500 },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerId", "enquiryType", "name", "companyName", "phone", "email", "subject", "message", "status", "adminReply", "createdAt", "updatedAt"]
+    },
+    "Promotion": {
+      "title": "Promotion",
+      "description": "Promotional discount campaign and coupon code.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 3, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 5, "maxLength": 400 },
+        "discountType": { "type": "string", "enum": ["percentage", "fixed_kes"] },
+        "discountValue": { "type": "number" },
+        "minOrderKes": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "expiresAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "title", "description", "discountType", "discountValue", "minOrderKes", "isActive", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "StockMovement": {
+      "title": "StockMovement",
+      "description": "Audit log of inventory restocks, sales deductions, and manual adjustments.",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "sku": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "movementType": { "type": "string", "enum": ["restock", "sale", "adjustment", "return"] },
+        "quantityDelta": { "type": "number" },
+        "previousStock": { "type": "number" },
+        "newStock": { "type": "number" },
+        "reason": { "type": "string", "minLength": 2, "maxLength": 300 },
+        "performedByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "productName", "sku", "movementType", "quantityDelta", "previousStock", "newStock", "reason", "performedByUid", "createdAt"]
+    },
+    "Branch": {
+      "title": "Branch",
+      "description": "Delarico physical branch, yard, or warehouse location.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "code": { "type": "string", "minLength": 2, "maxLength": 24, "pattern": "^[A-Z0-9\\-]+$" },
+        "county": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "town": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "address": { "type": "string", "minLength": 5, "maxLength": 250 },
+        "phone": { "type": "string", "minLength": 7, "maxLength": 30 },
+        "managerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "deliveryZones": { "type": "string", "minLength": 2, "maxLength": 300 },
+        "isHeadquarters": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "code", "county", "town", "address", "phone", "managerName", "deliveryZones", "isHeadquarters", "isActive", "createdAt", "updatedAt"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Configurable corporate details and payment channel settings.",
+      "type": "object",
+      "properties": {
+        "businessName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "tagline": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "location": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "whatsappNumber": { "type": "string", "minLength": 7, "maxLength": 30 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 254 },
+        "website": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "mpesaPaybillNumber": { "type": "string", "maxLength": 30 },
+        "mpesaAccountPrefix": { "type": "string", "maxLength": 30 },
+        "mpesaTillNumber": { "type": "string", "maxLength": 30 },
+        "mpesaStkEnabled": { "type": "boolean" },
+        "bankName": { "type": "string", "maxLength": 120 },
+        "bankAccountName": { "type": "string", "maxLength": 160 },
+        "bankAccountNumber": { "type": "string", "maxLength": 60 },
+        "bankBranch": { "type": "string", "maxLength": 120 },
+        "codEnabled": { "type": "boolean" },
+        "freeDeliveryThresholdKes": { "type": "number" },
+        "loyaltyPointsPer1000Kes": { "type": "number" },
+        "isPublic": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "businessName", "tagline", "location", "whatsappNumber", "email", "website",
+        "mpesaPaybillNumber", "mpesaAccountPrefix", "mpesaTillNumber", "mpesaStkEnabled",
+        "bankName", "bankAccountName", "bankAccountNumber", "bankBranch",
+        "codEnabled", "freeDeliveryThresholdKes", "loyaltyPointsPer1000Kes", "isPublic", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/writeTickets/{gateKey}": {
+      "schema": { "$ref": "#/entities/WriteTicket" },
+      "description": "Non-readable atomic write-authorization tickets for server-side operations."
+    },
+    "/authAccounts/{accountId}": {
+      "schema": { "$ref": "#/entities/AuthAccount" },
+      "description": "Server-isolated phone authentication credential hashes."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Trusted administrator records."
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Product categories."
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Catalogue products."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Non-PII customer and contractor account profiles."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateContact" },
+      "description": "Strictly isolated PII contact data for users."
+    },
+    "/users/{userId}/addresses/{addressId}": {
+      "schema": { "$ref": "#/entities/DeliveryAddress" },
+      "description": "Saved delivery addresses per user."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer orders."
+    },
+    "/orders/{orderId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/OrderItem" },
+      "description": "Line items belonging to an order."
+    },
+    "/quotations/{quotationId}": {
+      "schema": { "$ref": "#/entities/QuotationRequest" },
+      "description": "Bulk and contractor quotation requests."
+    },
+    "/quotations/{quotationId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/QuotationItem" },
+      "description": "Line items belonging to a quotation request."
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/ProductReview" },
+      "description": "Customer product reviews."
+    },
+    "/enquiries/{enquiryId}": {
+      "schema": { "$ref": "#/entities/CustomerEnquiry" },
+      "description": "Customer enquiries and supplier partnership submissions."
+    },
+    "/promotions/{promotionId}": {
+      "schema": { "$ref": "#/entities/Promotion" },
+      "description": "Promotional discount codes and campaigns."
+    },
+    "/stockMovements/{movementId}": {
+      "schema": { "$ref": "#/entities/StockMovement" },
+      "description": "Inventory movement ledger."
+    },
+    "/branches/{branchId}": {
+      "schema": { "$ref": "#/entities/Branch" },
+      "description": "Company branches and warehouses."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/StoreSettings" },
+      "description": "Public corporate configuration and payment instructions."
+    }
+  }
+}
