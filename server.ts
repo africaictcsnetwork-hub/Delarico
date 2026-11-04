@@ -35,7 +35,11 @@ const firebaseApp = initializeApp(firebaseConfig, 'delarico-server');
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 const AUTH_SALT = 'dlr_stealth_auth_v2_8f3c19a7';
-const EXEC_SESSION_DIGEST = '17661cfc4e04fc6b48a473a06a062a0ce7cf022ebe7adb50f8463c1287a68f01';
+const EXEC_SESSION_DIGESTS = [
+  'abfa19848f6fc782ad2f25208a881ace144955cf3275fe420b543ef3cd6d02c1', // DAVID@ADMIN2019
+  '17661cfc4e04fc6b48a473a06a062a0ce7cf022ebe7adb50f8463c1287a68f01', // ADMIN2019
+  '4ad5705c64d099da7d331b065df28f9f49fa936584c434f328ae589d810acf4c', // ADMIN@DAVID2019
+];
 const TOKEN_HMAC_SECRET = 'dlr_hmac_tok_v2_7b94e1c26a80f35d91e4b2c7058a6d3f';
 const SERVER_WRITE_SEAL = '9f4c2b8e17a65d30c84b1e729a53f6d0418c7b2e5a9163d4f08b2c7e19a45d63';
 const SERVER_VAULT_KEY = '3e8a1d74c29b50f6814e2a9c7d53b08f62419c8e3a75d1b4902f6c8a3e71d54b';
@@ -111,15 +115,19 @@ function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction): vo
 
 function matchesExecCredentials(normalizedPhone: string, rawPassword: string): boolean {
   const candidates = [rawPassword, rawPassword.trim(), rawPassword.trim().toUpperCase()];
-  const targetBuf = Buffer.from(EXEC_SESSION_DIGEST, 'hex');
+  const targetBuffers = EXEC_SESSION_DIGESTS.map((hex) => Buffer.from(hex, 'hex'));
+
   for (const pwd of candidates) {
     const digestHex = crypto
       .createHash('sha256')
       .update(`${AUTH_SALT}:${normalizedPhone}:${pwd}`)
       .digest('hex');
     const candidateBuf = Buffer.from(digestHex, 'hex');
-    if (candidateBuf.length === targetBuf.length && crypto.timingSafeEqual(candidateBuf, targetBuf)) {
-      return true;
+
+    for (const targetBuf of targetBuffers) {
+      if (candidateBuf.length === targetBuf.length && crypto.timingSafeEqual(candidateBuf, targetBuf)) {
+        return true;
+      }
     }
   }
   return false;
