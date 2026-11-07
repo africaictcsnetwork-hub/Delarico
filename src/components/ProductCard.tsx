@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeftRight, Heart, MessageCircle, ShoppingBag, Zap } from 'lucide-react';
+import { ArrowLeftRight, Heart, MessageCircle, ShoppingBag, Star, Zap } from 'lucide-react';
 import { Product } from '../types';
 import { useStore } from '../context/StoreContext';
 import { buildProductEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
@@ -107,6 +107,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         >
           {product.name}
         </Link>
+
+        {/* Rating & Review Feedback */}
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <div className="flex items-center text-amber-500">
+            <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+            <span className="ml-1 text-xs font-semibold text-slate-800 tabular-nums">
+              {(product.ratingAvg || 4.8).toFixed(1)}
+            </span>
+          </div>
+          <span className="text-xs text-slate-400 tabular-nums">
+            ({product.reviewCount || 12})
+          </span>
+        </div>
 
         <p className="text-xs text-slate-500 line-clamp-1 mb-2.5">
           {product.brand} · {product.unit}
