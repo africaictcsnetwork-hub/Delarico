@@ -68,12 +68,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, eager = false
         </Link>
 
         {/* Functional Quick Actions (Save + Compare) */}
-        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
+        <div className="absolute top-2 right-2 flex items-center gap-1">
           <button
             type="button"
             onClick={() => toggleFavourite(product.id)}
-            aria-label={isFav ? 'Remove from favourites' : 'Save to favourites'}
-            className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
+            aria-label={isFav ? 'Remove from saved items' : 'Save to wishlist'}
+            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
               isFav
                 ? 'bg-navy-900 text-gold-400 border-navy-900'
                 : 'bg-white/95 text-slate-700 border-slate-200 hover:text-navy-900'
@@ -86,7 +86,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, eager = false
             onClick={() => toggleCompare(product.id)}
             aria-label="Compare specifications"
             title="Compare specifications"
-            className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
+            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center border transition-colors shadow-xs ${
               isCompared
                 ? 'bg-royal-700 text-white border-royal-700'
                 : 'bg-white/95 text-slate-700 border-slate-200 hover:text-navy-900'
@@ -98,18 +98,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, eager = false
       </div>
 
       {/* Direct-to-Sale Purchase Details */}
-      <div className="flex flex-col flex-1 p-4">
+      <div className="flex flex-col flex-1 p-2.5 sm:p-4">
         {/* Clean unboxed metadata */}
-        <div className="flex items-center flex-wrap gap-1.5 text-xs text-slate-500 mb-1">
-          <span className="truncate max-w-[140px]">{product.categoryName}</span>
+        <div className="flex items-center flex-wrap gap-1 text-[11px] sm:text-xs text-slate-500 mb-1">
+          <span className="truncate max-w-[100px] sm:max-w-[140px]">{product.categoryName}</span>
           <span aria-hidden="true">·</span>
           <span className={product.stockQty > 0 ? 'text-emerald-700 font-medium' : 'text-red-700 font-medium'}>
-            {product.stockQty > 0 ? `${product.stockQty.toLocaleString()} in stock` : 'Out of stock'}
+            {product.stockQty > 0 ? `${product.stockQty.toLocaleString()} left` : 'Out of stock'}
           </span>
           {savingsPct > 0 && (
             <>
               <span aria-hidden="true">·</span>
-              <span className="text-amber-700 font-semibold tabular-nums">Save {savingsPct}%</span>
+              <span className="text-amber-700 font-semibold tabular-nums">-{savingsPct}%</span>
             </>
           )}
         </div>
@@ -139,61 +139,56 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, eager = false
         </p>
 
         {/* Pricing & Direct Add to Cart Controls */}
-        <div className="mt-auto pt-2.5 border-t border-slate-100">
-          <div className="flex items-baseline justify-between gap-2 mb-0.5">
-            <div className="flex items-baseline gap-2">
-              <span className="text-lg font-bold text-navy-900 tabular-nums">
-                {formatKes(displayPrice)}
+        <div className="mt-auto pt-2 border-t border-slate-100">
+          <div className="flex items-baseline flex-wrap gap-x-2 gap-y-0.5 mb-0.5">
+            <span className="text-sm sm:text-lg font-bold text-navy-900 tabular-nums whitespace-nowrap">
+              {formatKes(displayPrice)}
+            </span>
+            {product.compareAtPriceKes > displayPrice && (
+              <span className="text-[11px] sm:text-xs text-slate-400 line-through tabular-nums whitespace-nowrap">
+                {formatKes(product.compareAtPriceKes)}
               </span>
-              {product.compareAtPriceKes > displayPrice && (
-                <span className="text-xs text-slate-400 line-through tabular-nums">
-                  {formatKes(product.compareAtPriceKes)}
-                </span>
-              )}
-            </div>
+            )}
           </div>
 
-          <p className="text-xs text-emerald-700 font-medium tabular-nums mb-2.5">
+          <p className="text-[11px] sm:text-xs text-emerald-700 font-medium tabular-nums mb-2 line-clamp-1">
             Bulk ({product.minWholesaleQty}+): {formatKes(product.wholesalePriceKes)} / {product.unit}
           </p>
 
           {/* Jumia Quantity Selector */}
-          <div className="flex items-center justify-between gap-2 mb-2 bg-slate-50 border border-slate-200 rounded-lg p-1">
-            <span className="text-[11px] font-semibold text-slate-600 pl-1">Qty:</span>
-            <div className="flex items-center">
-              <button
-                type="button"
-                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                disabled={quantity <= 1 || product.stockQty <= 0}
-                aria-label={`Decrease quantity for ${product.name}`}
-                className="w-7 h-6 flex items-center justify-center text-slate-600 hover:text-navy-900 hover:bg-slate-200 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-              >
-                <Minus className="w-3 h-3" />
-              </button>
-              <input
-                type="number"
-                min={1}
-                max={Math.max(1, product.stockQty)}
-                value={quantity}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) {
-                    setQuantity(Math.max(1, Math.min(product.stockQty, val)));
-                  }
-                }}
-                aria-label="Quantity"
-                className="w-10 text-center text-xs font-bold text-navy-900 bg-white border border-slate-200 rounded mx-1 py-0.5 focus:outline-none focus:border-royal-600"
-              />
-              <button
-                type="button"
-                onClick={() => setQuantity((q) => Math.min(product.stockQty, q + 1))}
-                disabled={quantity >= product.stockQty || product.stockQty <= 0}
-                aria-label={`Increase quantity for ${product.name}`}
-                className="w-7 h-6 flex items-center justify-center text-slate-600 hover:text-navy-900 hover:bg-slate-200 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-            </div>
+          <div className="flex items-center justify-between gap-1 mb-2 bg-slate-50 border border-slate-200 rounded-lg p-1">
+            <button
+              type="button"
+              onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+              disabled={quantity <= 1 || product.stockQty <= 0}
+              aria-label={`Decrease quantity for ${product.name}`}
+              className="w-7 h-6 flex items-center justify-center text-slate-600 hover:text-navy-900 hover:bg-slate-200 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors shrink-0"
+            >
+              <Minus className="w-3 h-3" />
+            </button>
+            <input
+              type="number"
+              min={1}
+              max={Math.max(1, product.stockQty)}
+              value={quantity}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) {
+                  setQuantity(Math.max(1, Math.min(product.stockQty, val)));
+                }
+              }}
+              aria-label="Quantity"
+              className="w-10 min-w-0 text-center text-xs font-bold text-navy-900 bg-white border border-slate-200 rounded py-0.5 focus:outline-none focus:border-royal-600"
+            />
+            <button
+              type="button"
+              onClick={() => setQuantity((q) => Math.min(product.stockQty, q + 1))}
+              disabled={quantity >= product.stockQty || product.stockQty <= 0}
+              aria-label={`Increase quantity for ${product.name}`}
+              className="w-7 h-6 flex items-center justify-center text-slate-600 hover:text-navy-900 hover:bg-slate-200 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors shrink-0"
+            >
+              <Plus className="w-3 h-3" />
+            </button>
           </div>
 
           {/* Jumia Single Add to Cart Button */}
@@ -202,7 +197,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, eager = false
               type="button"
               onClick={handleAddToCart}
               disabled={product.stockQty <= 0}
-              className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shadow-xs uppercase tracking-wide ${
+              className={`flex-1 inline-flex items-center justify-center gap-1 py-2 sm:py-2.5 px-2 sm:px-3 text-[11px] sm:text-xs font-bold rounded-lg transition-colors whitespace-nowrap shadow-xs uppercase tracking-wide ${
                 justAdded
                   ? 'bg-emerald-600 text-white'
                   : 'bg-gold-500 hover:bg-gold-400 text-navy-950 disabled:bg-slate-200 disabled:text-slate-400'
@@ -226,9 +221,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, eager = false
               rel="noopener noreferrer"
               aria-label={`Order ${product.name} on WhatsApp`}
               title="Order on WhatsApp"
-              className="inline-flex items-center justify-center p-2.5 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors shrink-0"
+              className="inline-flex items-center justify-center p-2 sm:p-2.5 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors shrink-0"
             >
-              <MessageCircle className="w-4 h-4" />
+              <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </a>
           </div>
         </div>

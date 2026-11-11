@@ -21,6 +21,7 @@ import {
 import { NAV_LOGO_PATH } from '../firebase';
 import { useStore } from '../context/StoreContext';
 import { buildCartEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
+import { CustomerSupportChat } from './CustomerSupportChat';
 import { QuickSearchBar } from './QuickSearchBar';
 import { ResilientImage } from './ResilientImage';
 
@@ -61,6 +62,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [promoInput, setPromoInput] = useState('');
+  const [cartPulse, setCartPulse] = useState(false);
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -69,6 +71,13 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const totalCartItems = cart.reduce((sum, item) => sum + item.quantity, 0);
   const savedProducts = products.filter((p) => p.isActive && favouriteIds.includes(p.id));
+
+  useEffect(() => {
+    if (totalCartItems === 0) return;
+    setCartPulse(true);
+    const timer = window.setTimeout(() => setCartPulse(false), 600);
+    return () => window.clearTimeout(timer);
+  }, [totalCartItems]);
 
   const directWaUrl = buildWhatsAppUrl(
     `Hello ${settings.businessName}, I am visiting your website and would like assistance with building materials and pricing.`,
@@ -90,13 +99,13 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   return (
     <div className="min-h-screen flex flex-col bg-white text-slate-900 font-sans">
-      {/* Strict 3-Zone Corporate Top Bar (Navy Blue & Gold) */}
-      <header className="no-print sticky top-0 z-30 bg-navy-900 border-b border-gold-500/30 text-white">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-8 px-4 sm:px-6 lg:px-8 h-16">
-          {/* Zone 1: Brand Wordmark + Official Uploaded Logo */}
+      {/* Sticky Jumia-Style Top Bar (Logo, Navigation, Sticky Cart + Search) */}
+      <header className="no-print sticky top-0 z-30 bg-navy-900 border-b border-gold-500/30 text-white shadow-sm">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3 sm:gap-6 px-3 sm:px-6 lg:px-8 h-14 sm:h-16">
+          {/* Zone 1: Brand Wordmark + Official Logo */}
           <Link
             to="/"
-            className="flex items-center gap-3 text-base sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
+            className="flex items-center gap-2 sm:gap-3 text-sm sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
           >
             <span className="bg-white rounded-md p-1 flex items-center justify-center shadow-xs">
               <img
@@ -104,14 +113,15 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 alt="DELARICO Official Logo"
                 loading="eager"
                 decoding="async"
-                className="h-8 w-8 object-contain"
+                className="h-7 w-7 sm:h-8 sm:w-8 object-contain"
               />
             </span>
-            <span>DELARICO MERCHANDISE</span>
+            <span className="sm:hidden">DELARICO</span>
+            <span className="hidden sm:inline">DELARICO MERCHANDISE</span>
           </Link>
 
-          {/* Zone 2: 5 Clean Single-Line Navigation Links */}
-          <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-200">
+          {/* Zone 2: Clean Single-Line Navigation Links (Desktop) */}
+          <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-200">
             {navLinks.map((item) => {
               const active =
                 location.pathname === item.path ||
@@ -132,28 +142,118 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             })}
           </nav>
 
-          {/* Zone 3: Single Primary Action (plus mobile menu toggle on small screens) */}
-          <div className="flex items-center gap-3 shrink-0">
-            <Link
-              to="/request-quote"
-              className="hidden sm:inline-flex items-center px-4 py-2 text-xs font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 transition-colors whitespace-nowrap shrink-0"
+          {/* Zone 3: Always-Visible Top Cart + Saved + Account/Menu */}
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsWishlistOpen(true)}
+              aria-label={`Saved items (${favouriteIds.length})`}
+              className="relative inline-flex items-center gap-1.5 px-2.5 py-2 text-xs font-semibold text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
-              Request Quote{quoteDraft.length > 0 ? ` (${quoteDraft.length})` : ''}
-            </Link>
+              <Heart
+                className={`w-4 h-4 ${
+                  favouriteIds.length > 0 ? 'fill-gold-400 text-gold-400' : 'text-slate-200'
+                }`}
+              />
+              <span className="hidden sm:inline">Saved</span>
+              <span className="tabular-nums text-[11px] font-bold text-gold-300">
+                ({favouriteIds.length})
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsCartOpen(true)}
+              aria-label={`Open shopping cart with ${totalCartItems} items`}
+              className={`relative inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 text-xs font-bold text-navy-950 bg-gold-500 hover:bg-gold-400 rounded-lg transition-all duration-200 whitespace-nowrap shrink-0 shadow-xs ${
+                cartPulse ? 'scale-105 ring-2 ring-white' : ''
+              }`}
+            >
+              <ShoppingBag className="w-4 h-4 shrink-0" />
+              <span className="tabular-nums">Cart ({totalCartItems})</span>
+              {totalCartItems > 0 && (
+                <span className="hidden md:inline text-[11px] font-bold text-navy-900 border-l border-navy-900/20 pl-2 tabular-nums">
+                  {formatKes(cartSubtotalKes - cartDiscountKes)}
+                </span>
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => setMobileMenuOpen((v) => !v)}
               aria-label="Toggle navigation menu"
-              className="md:hidden p-2 text-slate-200 hover:text-white rounded-lg"
+              className="lg:hidden p-2 text-slate-200 hover:text-white rounded-lg"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
           </div>
         </div>
 
+        {/* Sticky Slim Search & Quick Shortcuts Bar (Always Accessible on Scroll) */}
+        <div className="bg-slate-50 border-t border-slate-200 text-slate-900">
+          <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2 flex items-center justify-between gap-2 sm:gap-3">
+            <QuickSearchBar searchTerm={searchTerm} setSearchTerm={setSearchTerm} />
+
+            <div className="hidden md:flex items-center gap-2 shrink-0">
+              <Link
+                to="/compare"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-slate-300 whitespace-nowrap shrink-0"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5 text-royal-700" />
+                <span>Compare ({compareIds.length})</span>
+              </Link>
+
+              <Link
+                to="/request-quote"
+                className="inline-flex items-center px-3 py-2 text-xs font-semibold text-navy-900 bg-white border border-slate-200 rounded-lg hover:border-navy-900 whitespace-nowrap shrink-0"
+              >
+                Quote{quoteDraft.length > 0 ? ` (${quoteDraft.length})` : ''}
+              </Link>
+
+              {user ? (
+                <Link
+                  to="/account"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-slate-300 whitespace-nowrap shrink-0"
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
+                  <span className="max-w-[120px] truncate">
+                    {userProfile?.displayName || user.displayName || 'My Account'}
+                  </span>
+                </Link>
+              ) : (
+                <>
+                  <Link
+                    to="/account"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-royal-600 whitespace-nowrap shrink-0"
+                  >
+                    <UserCheck className="w-3.5 h-3.5 text-navy-900" />
+                    <span>Sign In</span>
+                  </Link>
+                  <Link
+                    to="/account?mode=register"
+                    className="inline-flex items-center px-3 py-2 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 whitespace-nowrap shrink-0"
+                  >
+                    <span>Register</span>
+                  </Link>
+                </>
+              )}
+
+              {isAdmin && (
+                <Link
+                  to="/portal/workspace"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-royal-700 rounded-lg hover:bg-royal-600 whitespace-nowrap shrink-0"
+                >
+                  <LayoutDashboard className="w-3.5 h-3.5" />
+                  <span>Dashboard</span>
+                </Link>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Mobile Expandable Nav */}
         {mobileMenuOpen && (
-          <div className="md:hidden bg-navy-950 border-t border-slate-800 px-4 py-4 space-y-3">
+          <div className="lg:hidden bg-navy-950 border-t border-slate-800 px-4 py-4 space-y-3">
             <div className="flex flex-col space-y-2">
               {navLinks.map((item) => (
                 <Link
@@ -169,6 +269,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 className="py-2 text-sm font-medium text-gold-400 hover:text-gold-300"
               >
                 Saved Items ({favouriteIds.length})
+              </Link>
+              <Link
+                to="/compare"
+                className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
+              >
+                Compare Specs ({compareIds.length})
               </Link>
               <Link
                 to="/services"
@@ -215,85 +321,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           </div>
         )}
       </header>
-
-      {/* Storefront Utility Toolbar (Quick Search, Saved Items, Compare, Account, Cart) */}
-      <div className="no-print bg-slate-50 border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
-          <QuickSearchBar searchTerm={searchTerm} setSearchTerm={setSearchTerm} />
-
-          <div className="flex items-center flex-wrap gap-2 sm:gap-2.5">
-            <button
-              type="button"
-              onClick={() => setIsWishlistOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-slate-300 whitespace-nowrap shrink-0"
-            >
-              <Heart
-                className={`w-3.5 h-3.5 ${
-                  favouriteIds.length > 0 ? 'fill-gold-500 text-gold-500' : 'text-navy-900'
-                }`}
-              />
-              <span>Saved ({favouriteIds.length})</span>
-            </button>
-
-            <Link
-              to="/compare"
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-slate-300 whitespace-nowrap shrink-0"
-            >
-              <ArrowLeftRight className="w-3.5 h-3.5 text-royal-700" />
-              <span>Compare ({compareIds.length})</span>
-            </Link>
-
-            {user ? (
-              <Link
-                to="/account"
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-slate-300 whitespace-nowrap shrink-0"
-              >
-                <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
-                <span className="max-w-[130px] truncate">
-                  {userProfile?.displayName || user.displayName || 'My Account'}
-                </span>
-              </Link>
-            ) : (
-              <>
-                <Link
-                  to="/account"
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-royal-600 whitespace-nowrap shrink-0"
-                >
-                  <UserCheck className="w-3.5 h-3.5 text-navy-900" />
-                  <span>Sign In</span>
-                </Link>
-                <Link
-                  to="/account?mode=register"
-                  className="inline-flex items-center px-3 py-2 text-xs font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 whitespace-nowrap shrink-0"
-                >
-                  <span>Create Account</span>
-                </Link>
-              </>
-            )}
-
-            {isAdmin && (
-              <Link
-                to="/portal/workspace"
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-royal-700 rounded-lg hover:bg-royal-600 whitespace-nowrap shrink-0"
-              >
-                <LayoutDashboard className="w-3.5 h-3.5" />
-                <span>Dashboard</span>
-              </Link>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setIsCartOpen(true)}
-              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 whitespace-nowrap shrink-0"
-            >
-              <ShoppingBag className="w-3.5 h-3.5 text-gold-400" />
-              <span className="tabular-nums">
-                Cart ({totalCartItems}) · {formatKes(cartSubtotalKes - cartDiscountKes)}
-              </span>
-            </button>
-          </div>
-        </div>
-      </div>
 
       {/* Main Content */}
       <main className="flex-1">{children}</main>
@@ -836,17 +863,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       )}
 
-      {/* Official Floating WhatsApp Button (+254 706 824489) */}
-      <a
-        href={directWaUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label={`Chat with DELARICO on WhatsApp (${settings.whatsappNumber})`}
-        className="no-print fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white text-xs font-semibold rounded-full shadow-lg hover:bg-emerald-700 transition-transform duration-150 hover:-translate-y-0.5"
-      >
-        <MessageCircle className="w-4 h-4" />
-        <span className="hidden sm:inline">WhatsApp {settings.whatsappNumber}</span>
-      </a>
+      {/* AI Customer Care Provider Online & WhatsApp Support */}
+      <CustomerSupportChat />
 
       {/* Non-Blocking Toast Notifications */}
       {toasts.length > 0 && (

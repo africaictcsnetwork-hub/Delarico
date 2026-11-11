@@ -24,6 +24,55 @@ import {
   INITIAL_PROMOTIONS,
   INITIAL_REVIEWS,
 } from '../data/seedCatalog';
+import { createProductGallery } from '../utils/productVisuals';
+
+function sanitizeProductRecord(item: Product): Product {
+  const realImages = Array.isArray(item.images)
+    ? item.images.filter(
+        (img) =>
+          typeof img === 'string' &&
+          img.trim().length > 0 &&
+          !img.trim().toLowerCase().startsWith('data:image/svg')
+      )
+    : [];
+
+  if (realImages.length > 0) {
+    return { ...item, images: realImages };
+  }
+
+  const seedMatch = INITIAL_PRODUCTS.find(
+    (s) => s.id === item.id || s.slug === item.slug
+  );
+  if (seedMatch && seedMatch.images.length > 0) {
+    return { ...item, images: seedMatch.images };
+  }
+
+  const text = `${item.name || ''} ${item.categoryName || ''}`.toLowerCase();
+  const inferred =
+    text.includes('cement') || text.includes('mortar')
+      ? createProductGallery('cement')
+      : text.includes('mabati') || text.includes('roof')
+      ? createProductGallery('mabati')
+      : text.includes('brc') || text.includes('mesh') || text.includes('rebar') || text.includes('steel')
+      ? createProductGallery('rebar')
+      : text.includes('window')
+      ? createProductGallery('window_casement')
+      : text.includes('door')
+      ? createProductGallery('door_mahogany')
+      : text.includes('timber') || text.includes('cypress') || text.includes('plywood')
+      ? createProductGallery('timber')
+      : text.includes('tank')
+      ? createProductGallery('water_tank')
+      : text.includes('wheelbarrow')
+      ? createProductGallery('wheelbarrow')
+      : text.includes('paint')
+      ? createProductGallery('paint_bucket')
+      : text.includes('solar') || text.includes('light')
+      ? createProductGallery('solar_floodlight')
+      : createProductGallery('drill');
+
+  return { ...item, images: inferred };
+}
 
 export interface ToastNotice {
   id: string;
@@ -294,7 +343,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const unsubProd = onSnapshot(
       prodQuery,
       (snap) => {
-        const items = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Product, 'id'>) }));
+        const items = snap.docs
+          .map((d) => sanitizeProductRecord({ id: d.id, ...(d.data() as Omit<Product, 'id'>) }))
+          .filter(Boolean);
         setDbProducts(items);
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'products')

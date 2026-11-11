@@ -18,11 +18,16 @@ export const ResilientImage: React.FC<ResilientImageProps> = ({
 }) => {
   const [failed, setFailed] = useState(false);
 
+  const safeSrc =
+    src && !src.trim().toLowerCase().startsWith('data:image/svg')
+      ? src
+      : '/assets/materials/hero-yard.jpg';
+
   useEffect(() => {
     setFailed(false);
-  }, [src]);
+  }, [safeSrc]);
 
-  if (!src || failed) {
+  if (!safeSrc || failed) {
     return (
       <div
         className={`flex flex-col items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 p-4 text-center ${className}`}
@@ -39,7 +44,7 @@ export const ResilientImage: React.FC<ResilientImageProps> = ({
 
   return (
     <img
-      src={src}
+      src={safeSrc}
       alt={alt}
       loading={eager ? 'eager' : 'lazy'}
       decoding="async"

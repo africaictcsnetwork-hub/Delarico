@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { initializeApp } from 'firebase/app';
 import {
   collection,
@@ -26,6 +27,7 @@ import {
   INITIAL_PROMOTIONS,
   INITIAL_REVIEWS,
 } from './src/data/seedCatalog.ts';
+import { createProductGallery } from './src/utils/productVisuals.ts';
 import { getProductCommissionRatePct, normalizeKenyanPhone } from './src/utils/whatsapp.ts';
 
 const firebaseConfig = JSON.parse(
@@ -242,19 +244,53 @@ async function loadUserBundle(session: SessionTokenPayload) {
   };
 }
 
+function hasOnlyRealPhotos(imgs: unknown): boolean {
+  if (!Array.isArray(imgs) || imgs.length === 0) return false;
+  return imgs.every(
+    (u) =>
+      typeof u === 'string' &&
+      u.trim().length > 0 &&
+      !u.trim().toLowerCase().startsWith('data:image/svg')
+  );
+}
+
+function resolveRealGalleryForRecord(id: string, data: Record<string, unknown>): string[] {
+  const seed = INITIAL_PRODUCTS.find((p) => p.id === id || p.slug === data.slug);
+  if (seed) return seed.images;
+  const text = `${String(data.name || '')} ${String(data.categoryName || '')}`.toLowerCase();
+  if (text.includes('cement') || text.includes('mortar')) return createProductGallery('cement');
+  if (text.includes('mabati') || text.includes('roof')) return createProductGallery('mabati');
+  if (text.includes('brc') || text.includes('mesh') || text.includes('rebar') || text.includes('steel')) {
+    return createProductGallery('rebar');
+  }
+  if (text.includes('window')) return createProductGallery('window_casement');
+  if (text.includes('door')) return createProductGallery('door_mahogany');
+  if (text.includes('timber') || text.includes('cypress') || text.includes('plywood')) {
+    return createProductGallery('timber');
+  }
+  if (text.includes('tank')) return createProductGallery('water_tank');
+  if (text.includes('wheelbarrow')) return createProductGallery('wheelbarrow');
+  if (text.includes('paint')) return createProductGallery('paint_bucket');
+  if (text.includes('solar') || text.includes('light')) return createProductGallery('solar_floodlight');
+  return createProductGallery('drill');
+}
+
 async function syncCatalogToFirestore(force = false): Promise<void> {
   try {
     if (!force) {
       const settingsSnap = await getDoc(doc(db, 'settings', 'corporate'));
-      const tankProdSnap = await getDoc(doc(db, 'products', 'prod-water-tank-5000l'));
       const settingsData = settingsSnap.data();
-      const tankData = tankProdSnap.data();
       const hasUpdatedPhone = settingsData?.whatsappNumber === '+254 706 824489';
-      const hasDedicatedKenyanPhotos =
-        Array.isArray(tankData?.images) &&
-        tankData.images[0] === '/assets/materials/water-tank.jpg';
 
-      if (hasUpdatedPhone && hasDedicatedKenyanPhotos) {
+      const allProdsSnap = await getDocs(
+        query(collection(db, 'products'), where('isActive', '==', true))
+      );
+      const missingSeeds = INITIAL_PRODUCTS.some(
+        (seed) => !allProdsSnap.docs.some((d) => d.id === seed.id)
+      );
+      const staleSvgDocs = allProdsSnap.docs.filter((d) => !hasOnlyRealPhotos(d.data()?.images));
+
+      if (hasUpdatedPhone && !missingSeeds && staleSvgDocs.length === 0) {
         // Ensure initial Kenyan customer reviews are seeded if none exist yet
         const revSnap = await getDocs(query(collection(db, 'reviews'), where('status', '==', 'published')));
         if (revSnap.empty) {
@@ -278,6 +314,23 @@ async function syncCatalogToFirestore(force = false): Promise<void> {
         }
         return;
       }
+
+      // If only stale SVG product images need upgrading, patch every offending document cleanly
+      if (hasUpdatedPhone && !missingSeeds && staleSvgDocs.length > 0) {
+        const patchNow = serverTimestamp();
+        const patchOps: GatedWriteOp[] = staleSvgDocs.map((d) => ({
+          type: 'update',
+          ref: doc(db, 'products', d.id),
+          gateKey: `prod_${d.id}`,
+          data: {
+            images: resolveRealGalleryForRecord(d.id, d.data() as Record<string, unknown>),
+            updatedAt: patchNow,
+          },
+        }));
+        await commitGatedOps(patchOps);
+        console.log(`[DELARICO] Upgraded ${staleSvgDocs.length} Firestore products to real Kenyan photos.`);
+        return;
+      }
     }
 
     const now = serverTimestamp();
@@ -296,41 +349,63 @@ async function syncCatalogToFirestore(force = false): Promise<void> {
     ]);
 
     // 2. Categories first (products validate category existence)
-    const catOps: GatedWriteOp[] = [];
-    for (const cat of INITIAL_CATEGORIES) {
+    const existingCatsSnap = await getDocs(
+      query(collection(db, 'categories'), where('isActive', '==', true))
+    );
+    const existingCatIds = new Set(existingCatsSnap.docs.map((d) => d.id));
+    const catOps: GatedWriteOp[] = INITIAL_CATEGORIES.map((cat) => {
       const { id, ...rest } = cat;
       const ref = doc(db, 'categories', id);
-      const snap = await getDoc(ref);
-      catOps.push(
-        snap.exists()
-          ? { type: 'update', ref, gateKey: `cat_${id}`, data: { ...rest, updatedAt: now } }
-          : { type: 'set', ref, gateKey: `cat_${id}`, data: { ...rest, createdAt: now, updatedAt: now } }
-      );
-    }
+      return existingCatIds.has(id)
+        ? { type: 'update', ref, gateKey: `cat_${id}`, data: { ...rest, updatedAt: now } }
+        : { type: 'set', ref, gateKey: `cat_${id}`, data: { ...rest, createdAt: now, updatedAt: now } };
+    });
     await commitGatedOps(catOps);
 
-    // 3. Products
-    const prodOps: GatedWriteOp[] = [];
-    for (const prod of INITIAL_PRODUCTS) {
+    // 3. Products (update or create all seeds + replace any non-seed SVG drawings)
+    const existingProdsSnap = await getDocs(
+      query(collection(db, 'products'), where('isActive', '==', true))
+    );
+    const existingProdIds = new Set(existingProdsSnap.docs.map((d) => d.id));
+    const prodOps: GatedWriteOp[] = INITIAL_PRODUCTS.map((prod) => {
       const { id, ...rest } = prod;
       const ref = doc(db, 'products', id);
-      const snap = await getDoc(ref);
-      prodOps.push(
-        snap.exists()
-          ? { type: 'update', ref, gateKey: `prod_${id}`, data: { ...rest, updatedAt: now } }
-          : { type: 'set', ref, gateKey: `prod_${id}`, data: { ...rest, createdAt: now, updatedAt: now } }
-      );
+      return existingProdIds.has(id)
+        ? { type: 'update', ref, gateKey: `prod_${id}`, data: { ...rest, updatedAt: now } }
+        : { type: 'set', ref, gateKey: `prod_${id}`, data: { ...rest, createdAt: now, updatedAt: now } };
+    });
+    const seedIdSet = new Set(INITIAL_PRODUCTS.map((p) => p.id));
+    for (const d of existingProdsSnap.docs) {
+      if (!seedIdSet.has(d.id) && !hasOnlyRealPhotos(d.data()?.images)) {
+        prodOps.push({
+          type: 'update',
+          ref: doc(db, 'products', d.id),
+          gateKey: `prod_${d.id}`,
+          data: {
+            images: resolveRealGalleryForRecord(d.id, d.data() as Record<string, unknown>),
+            updatedAt: now,
+          },
+        });
+      }
     }
     await commitGatedOps(prodOps);
 
-    // 4. Promotions & Branches
+    // 4. Promotions, Branches & Reviews
+    const [existingPromosSnap, existingBranchesSnap, existingReviewsSnap] = await Promise.all([
+      getDocs(query(collection(db, 'promotions'), where('isActive', '==', true))),
+      getDocs(query(collection(db, 'branches'), where('isActive', '==', true))),
+      getDocs(query(collection(db, 'reviews'), where('status', '==', 'published'))),
+    ]);
+    const existingPromoIds = new Set(existingPromosSnap.docs.map((d) => d.id));
+    const existingBranchIds = new Set(existingBranchesSnap.docs.map((d) => d.id));
+    const existingReviewIds = new Set(existingReviewsSnap.docs.map((d) => d.id));
+
     const miscOps: GatedWriteOp[] = [];
     for (const promo of INITIAL_PROMOTIONS) {
       const { id, ...rest } = promo;
       const ref = doc(db, 'promotions', id);
-      const snap = await getDoc(ref);
       miscOps.push(
-        snap.exists()
+        existingPromoIds.has(id)
           ? { type: 'update', ref, gateKey: `promo_${id}`, data: { ...rest, updatedAt: now } }
           : { type: 'set', ref, gateKey: `promo_${id}`, data: { ...rest, createdAt: now, updatedAt: now } }
       );
@@ -338,21 +413,18 @@ async function syncCatalogToFirestore(force = false): Promise<void> {
     for (const branch of INITIAL_BRANCHES) {
       const { id, ...rest } = branch;
       const ref = doc(db, 'branches', id);
-      const snap = await getDoc(ref);
       miscOps.push(
-        snap.exists()
+        existingBranchIds.has(id)
           ? { type: 'update', ref, gateKey: `branch_${id}`, data: { ...rest, updatedAt: now } }
           : { type: 'set', ref, gateKey: `branch_${id}`, data: { ...rest, createdAt: now, updatedAt: now } }
       );
     }
     for (const rev of INITIAL_REVIEWS) {
       const { id, ...rest } = rev;
-      const ref = doc(db, 'reviews', id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) {
+      if (!existingReviewIds.has(id)) {
         miscOps.push({
           type: 'set',
-          ref,
+          ref: doc(db, 'reviews', id),
           gateKey: `rev_${id}`,
           data: {
             ...rest,
@@ -364,7 +436,9 @@ async function syncCatalogToFirestore(force = false): Promise<void> {
         });
       }
     }
-    await commitGatedOps(miscOps);
+    if (miscOps.length > 0) {
+      await commitGatedOps(miscOps);
+    }
     console.log('[DELARICO] Live Firestore catalogue synchronized with real Kenyan materials & +254 706 824489.');
   } catch (err) {
     console.error('[DELARICO] Startup catalog sync warning:', err);
@@ -2240,6 +2314,224 @@ async function startServer() {
     } catch (err) {
       console.error('Manual seed error:', err);
       res.status(500).json({ error: 'Failed to synchronize catalogue.' });
+    }
+  });
+
+  // =========================================================================
+  // AI Customer Service Chatbot (Server-Side Gemini 3.8 Flash)
+  // =========================================================================
+  let cachedCatalogSummary = '';
+  let cachedCatalogSummaryAt = 0;
+
+  async function getAiPlatformContext(): Promise<string> {
+    if (cachedCatalogSummary && Date.now() - cachedCatalogSummaryAt < 60_000) {
+      return cachedCatalogSummary;
+    }
+
+    let prodList: Array<Record<string, unknown>> = INITIAL_PRODUCTS as unknown as Array<Record<string, unknown>>;
+    let promoList: Array<Record<string, unknown>> = INITIAL_PROMOTIONS as unknown as Array<Record<string, unknown>>;
+    let branchList: Array<Record<string, unknown>> = INITIAL_BRANCHES as unknown as Array<Record<string, unknown>>;
+    let corpSettings: Record<string, unknown> = DEFAULT_STORE_SETTINGS as unknown as Record<string, unknown>;
+
+    try {
+      const [prodsSnap, promosSnap, branchSnap, settingsSnap] = await Promise.race([
+        Promise.all([
+          getDocs(query(collection(db, 'products'), where('isActive', '==', true))),
+          getDocs(query(collection(db, 'promotions'), where('isActive', '==', true))),
+          getDocs(query(collection(db, 'branches'), where('isActive', '==', true))),
+          getDoc(doc(db, 'settings', 'corporate')),
+        ]),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Catalog context lookup timeout')), 2500)
+        ),
+      ]);
+      if (!prodsSnap.empty) {
+        prodList = prodsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      }
+      if (!promosSnap.empty) {
+        promoList = promosSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      }
+      if (!branchSnap.empty) {
+        branchList = branchSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      }
+      if (settingsSnap.exists()) {
+        corpSettings = settingsSnap.data() as Record<string, unknown>;
+      }
+    } catch {
+      // Fallback cleanly to seed catalog constants
+    }
+
+    const catalogLines = prodList
+      .map(
+        (p) =>
+          `- ${String(p.name)} (SKU: ${String(p.sku)}, Category: ${String(p.categoryName)}, Unit: ${String(p.unit)}): Retail KES ${Number(p.priceKes || 0).toLocaleString()}, Bulk Wholesale (${Number(p.minWholesaleQty || 1)}+ units) KES ${Number(p.wholesalePriceKes || 0).toLocaleString()}, In stock: ${Number(p.stockQty || 0)}`
+      )
+      .join('\n');
+
+    const promoLines = promoList
+      .map(
+        (pr) =>
+          `- Code ${String(pr.code)}: ${Number(pr.discountPercent || 0)}% off${pr.minSpendKes ? ` (min order KES ${Number(pr.minSpendKes).toLocaleString()})` : ''}`
+      )
+      .join('\n');
+
+    const branchLines = branchList
+      .map(
+        (b) =>
+          `- ${String(b.name)}: ${String(b.address || b.town)}, Hours: ${String(b.hours || 'Mon–Sat 7:30am–6:00pm')}, Phone: ${String(b.phone || '+254 706 824489')}`
+      )
+      .join('\n');
+
+    cachedCatalogSummary = `BUSINESS: ${String(corpSettings.businessName || 'DELARICO MERCHANDISE & SUPPLIES')} — "${String(corpSettings.tagline || 'Built on Quality. Driven by Trust.')}"
+LOCATION: ${String(corpSettings.location || 'Siaya, Kenya')}
+OFFICIAL WHATSAPP / CALL / M-PESA NUMBER: ${String(corpSettings.whatsappNumber || '+254 706 824489')} (Paybill / Till / Pochi Recipient: ${String(corpSettings.bankAccountName || 'DELARICO MERCHANDISE & SUPPLIES')})
+EMAIL: ${String(corpSettings.email || 'info@delarico.co.ke')}
+FREE DELIVERY THRESHOLD: Orders above KES ${Number(corpSettings.freeDeliveryThresholdKes || 80000).toLocaleString()} within Siaya County qualify for free delivery; fast dispatch across Kisumu, Bondo, Ugenya, Busia, Kisii & nationwide transport arranged.
+
+PLATFORM FEATURES & PAGES:
+- Direct Online Store (/ and /products): Choose quantity right on product cards and click Add to Cart; cart is always visible at the top bar; checkout supports M-Pesa, Cash on Delivery (COD), and direct WhatsApp order.
+- Quick Search: Instant autocomplete bar at the top header (shortcut '/' or Ctrl+K) to find any material, brand, or SKU.
+- Saved Items / Wishlist (/saved or top Saved button): Save preferred construction materials in localStorage for later, move all to cart, or send via WhatsApp.
+- Compare Specs (/compare): Side-by-side comparison of dimensions, weight, compliance, retail & bulk prices.
+- Bulk Project Quotations & BOQ (/request-quote): Request custom proforma quotes for large house/school/commercial builds.
+- Customer Star Ratings & Reviews: Available on every product detail page (/product/<slug>); customers can rate 1–5 stars directly.
+- Affiliate Program (/affiliates): Free to join; share referral links and earn 3%–5% commission (Cement/Steel/Roofing 3%, Timber/Doors/Windows 4%, Hardware/Tools/Paint/Water Tanks 5%), paid via M-Pesa.
+- Customer Account (/account): Quick phone + password registration & login to track orders, loyalty points, saved items, and quotes.
+
+ACTIVE PROMOTIONS:
+${promoLines || '- Code CONTRACTOR5: 5% off contractor orders'}
+
+BRANCHES & COLLECTION YARDS:
+${branchLines}
+
+LIVE PRODUCT CATALOGUE & KES PRICING:
+${catalogLines}`;
+
+    cachedCatalogSummaryAt = Date.now();
+    return cachedCatalogSummary;
+  }
+
+  app.post('/api/ai/chat', async (req: Request, res: Response) => {
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        res.status(503).json({
+          error:
+            'AI Customer Care requires a GEMINI_API_KEY in Settings > Secrets. Meanwhile, reach us directly on WhatsApp +254 706 824489.',
+        });
+        return;
+      }
+
+      const message = String(req.body?.message || '').trim().slice(0, 1000);
+      if (!message) {
+        res.status(400).json({ error: 'Please type a question for Customer Care.' });
+        return;
+      }
+
+      const rawHistory: unknown[] = Array.isArray(req.body?.history) ? req.body.history : [];
+      const historyContents = rawHistory
+        .slice(-10)
+        .filter(
+          (turn: unknown): turn is { role: 'user' | 'model'; text: string } =>
+            Boolean(turn) &&
+            typeof turn === 'object' &&
+            ((turn as { role?: string }).role === 'user' ||
+              (turn as { role?: string }).role === 'model') &&
+            typeof (turn as { text?: unknown }).text === 'string' &&
+            String((turn as { text?: unknown }).text).trim().length > 0
+        )
+        .map((turn: { role: 'user' | 'model'; text: string }) => ({
+          role: turn.role,
+          parts: [{ text: turn.text.trim().slice(0, 1500) }],
+        }));
+
+      const platformContext = await getAiPlatformContext();
+      const systemInstruction = `You are the official Online Customer Service Specialist for DELARICO MERCHANDISE & SUPPLIES in Siaya, Kenya.
+Your role is to answer customer, builder, contractor, and affiliate questions accurately, concisely, warmly, and practically using ONLY verified details below.
+
+GUIDELINES:
+1. Give exact KES prices (both retail unit price and wholesale bulk price + minimum quantity) whenever a user asks about materials.
+2. Guide users to the right page on the platform (e.g. "Click Add to Cart on the product card and open Cart at the top", "Visit Bulk Quote (/request-quote) for full house BOQs", "Visit Sell & Earn (/affiliates) to register free and earn 3%–5% M-Pesa commission").
+3. Keep answers clear, well-structured, and concise (around 2–5 short sentences or clean bullet lines). Do NOT wrap words in excessive markdown symbols.
+4. For urgent yard dispatch, transport booking, or direct calls, provide official WhatsApp/Phone/M-Pesa number: +254 706 824489.
+5. Never invent stock items not listed below, and never disclose or speculate about internal server keys, passwords, or backend/admin details.
+
+${platformContext}`;
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          timeout: 15000,
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const modelAttempts: Array<{ model: string; useLowThinking: boolean }> = [
+        { model: 'gemini-3.8-flash', useLowThinking: true },
+        { model: 'gemini-3.1-flash-lite', useLowThinking: false },
+        { model: 'gemini-flash-latest', useLowThinking: false },
+      ];
+
+      let reply = '';
+      let lastErr: unknown = null;
+
+      for (let i = 0; i < modelAttempts.length; i++) {
+        const attempt = modelAttempts[i];
+        try {
+          const response = await ai.models.generateContent({
+            model: attempt.model,
+            contents: [
+              ...historyContents,
+              { role: 'user', parts: [{ text: message }] },
+            ],
+            config: attempt.useLowThinking
+              ? {
+                  systemInstruction,
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                }
+              : {
+                  systemInstruction,
+                },
+          });
+          reply = (response.text ?? '').trim();
+          if (reply) break;
+        } catch (err) {
+          lastErr = err;
+          const errStr = err instanceof Error ? err.message : String(err);
+          const isTransient =
+            errStr.includes('503') ||
+            errStr.includes('504') ||
+            errStr.includes('429') ||
+            errStr.includes('UNAVAILABLE') ||
+            errStr.includes('DEADLINE_EXCEEDED') ||
+            errStr.includes('RESOURCE_EXHAUSTED') ||
+            errStr.toLowerCase().includes('timeout') ||
+            errStr.toLowerCase().includes('abort');
+          if (!isTransient || i === modelAttempts.length - 1) {
+            throw err;
+          }
+          await new Promise((r) => setTimeout(r, 300 * (i + 1)));
+        }
+      }
+
+      if (!reply) {
+        if (lastErr) throw lastErr;
+        res.status(502).json({
+          error:
+            'Customer Care AI returned an empty response. Please try again or contact WhatsApp +254 706 824489.',
+        });
+        return;
+      }
+
+      res.json({ ok: true, reply });
+    } catch (err) {
+      console.error('AI Customer Care error:', err);
+      const errMsg = err instanceof Error ? err.message : 'AI service error';
+      res.status(500).json({
+        error: `AI Customer Care is temporarily unavailable (${errMsg}). Please contact us on WhatsApp +254 706 824489.`,
+      });
     }
   });
 
