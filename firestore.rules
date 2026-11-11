@@ -126,8 +126,9 @@ service cloud.firestore {
           'specSummary', 'dimensions', 'brand', 'unit', 'priceKes', 'wholesalePriceKes',
           'minWholesaleQty', 'compareAtPriceKes', 'stockQty', 'lowStockThreshold',
           'weightKg', 'images', 'featured', 'bestSeller', 'onPromotion', 'promoLabel',
-          'isActive', 'ratingAvg', 'reviewCount', 'createdAt', 'updatedAt'
+          'isActive', 'ratingAvg', 'reviewCount', 'vaultKey', 'createdAt', 'updatedAt'
         ]) &&
+        hasValidOptionalVaultKey(data) &&
         data.name is string && data.name.size() >= 2 && data.name.size() <= 160 &&
         data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 160 && data.slug.matches('^[a-z0-9\\-]+$') &&
         data.sku is string && data.sku.size() >= 2 && data.sku.size() <= 64 && data.sku.matches('^[A-Z0-9\\-]+$') &&
@@ -318,7 +319,8 @@ service cloud.firestore {
 
     function isValidReview(data) {
       return data.keys().hasAll(['productId', 'productName', 'customerId', 'customerName', 'rating', 'title', 'comment', 'verifiedBuyer', 'status', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['productId', 'productName', 'customerId', 'customerName', 'rating', 'title', 'comment', 'verifiedBuyer', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['productId', 'productName', 'customerId', 'customerName', 'rating', 'title', 'comment', 'verifiedBuyer', 'status', 'vaultKey', 'createdAt', 'updatedAt']) &&
+        hasValidOptionalVaultKey(data) &&
         isValidId(data.productId) &&
         data.productName is string && data.productName.size() >= 2 && data.productName.size() <= 160 &&
         isValidId(data.customerId) &&
@@ -489,6 +491,26 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidNewsletterSubscriber(data) {
+      return data.keys().hasAll([
+          'email', 'consentAccepted', 'consentPolicyVersion', 'consentText',
+          'source', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'email', 'consentAccepted', 'consentPolicyVersion', 'consentText',
+          'source', 'status', 'vaultKey', 'createdAt', 'updatedAt'
+        ]) &&
+        hasValidOptionalVaultKey(data) &&
+        data.email is string && data.email.size() >= 5 && data.email.size() <= 254 &&
+        data.consentAccepted is bool &&
+        data.consentPolicyVersion is string && data.consentPolicyVersion.size() >= 2 && data.consentPolicyVersion.size() <= 40 &&
+        data.consentText is string && data.consentText.size() >= 10 && data.consentText.size() <= 400 &&
+        data.source is string && data.source in ['footer', 'checkout', 'account'] &&
+        data.status is string && data.status in ['subscribed', 'unsubscribed'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // Collection Match Blocks
     // =========================================================================
@@ -541,7 +563,7 @@ service cloud.firestore {
 
     match /products/{productId} {
       allow get: if isValidId(productId) && (existing().isActive == true || isAdmin());
-      allow list: if existing().isActive == true || isBootstrappedAdmin();
+      allow list: if existing().isActive == true || isBootstrappedAdmin() || hasServerVaultRead();
       allow create: if isValidId(productId) && isValidProduct(incoming()) &&
         incoming().createdAt == request.time && incoming().updatedAt == request.time &&
         (
@@ -825,7 +847,8 @@ service cloud.firestore {
       );
       allow list: if existing().status == 'published' ||
         (isSignedIn() && existing().customerId == request.auth.uid) ||
-        isBootstrappedAdmin();
+        isBootstrappedAdmin() ||
+        hasServerVaultRead();
       allow create: if isValidId(reviewId) && isValidReview(incoming()) &&
         incoming().verifiedBuyer == false &&
         incoming().status == 'published' &&
@@ -1011,6 +1034,29 @@ service cloud.firestore {
           (isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && isAdmin())
         );
       allow delete: if isValidId(referralId) && (hasServerWriteGate('affref_' + referralId) || (isAdmin() && !('vaultKey' in existing())));
+    }
+
+    match /newsletterSubscribers/{subscriberId} {
+      allow get: if isAdmin() && isValidId(subscriberId) && !('vaultKey' in existing());
+      allow list: if (isBootstrappedAdmin() && !('vaultKey' in existing()) && existing().email is string) ||
+        hasServerVaultRead();
+      allow create: if isValidId(subscriberId) && isValidNewsletterSubscriber(incoming()) &&
+        incoming().consentAccepted == true &&
+        incoming().status == 'subscribed' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        hasServerWriteGate('news_' + subscriberId);
+      allow update: if isValidId(subscriberId) && isValidNewsletterSubscriber(incoming()) &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          hasServerWriteGate('news_' + subscriberId) ||
+          (isVerifiedUser() && !('vaultKey' in existing()) && !('vaultKey' in incoming()) && isAdmin())
+        );
+      allow delete: if isValidId(subscriberId) && (
+        hasServerWriteGate('news_' + subscriberId) ||
+        (isAdmin() && !('vaultKey' in existing()))
+      );
     }
   }
 }

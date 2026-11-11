@@ -8,37 +8,46 @@ import {
   Download,
   Edit3,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileText,
   Layers,
   LogOut,
+  Mail,
   MessageSquare,
   Package,
   Plus,
   RefreshCw,
+  Save,
+  Search,
   Settings,
   Share2,
+  Star,
   Tag,
   Trash2,
   Upload,
   Users,
   Wallet,
+  X,
 } from 'lucide-react';
 import { OFFICIAL_LOGO_PATH } from '../firebase';
 import { useStore } from '../context/StoreContext';
 import {
   AffiliateProfile,
   AffiliateReferral,
+  CustomerAdminRecord,
   CustomerEnquiry,
+  NewsletterSubscriber,
   Order,
   OrderItem,
   OrderStatus,
   PaymentStatus,
   Product,
+  ProductReview,
   QuotationItem,
   QuotationRequest,
   StockMovement,
   StoreSettings,
-  UserPublicProfile,
 } from '../types';
 import { InvoiceModal } from '../components/InvoiceModal';
 import { ResilientImage } from '../components/ResilientImage';
@@ -59,6 +68,8 @@ type AdminSection =
   | 'customers'
   | 'affiliates'
   | 'promotions'
+  | 'reviews'
+  | 'newsletter'
   | 'financials'
   | 'branches';
 
@@ -119,11 +130,58 @@ export const AdminDashboardPage: React.FC = () => {
   // Operations Collections loaded via /api/ops/bootstrap
   const [orders, setOrders] = useState<Order[]>([]);
   const [quotations, setQuotations] = useState<QuotationRequest[]>([]);
-  const [customers, setCustomers] = useState<UserPublicProfile[]>([]);
+  const [customers, setCustomers] = useState<CustomerAdminRecord[]>([]);
   const [enquiries, setEnquiries] = useState<CustomerEnquiry[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [affiliates, setAffiliates] = useState<AffiliateProfile[]>([]);
   const [affiliateReferrals, setAffiliateReferrals] = useState<AffiliateReferral[]>([]);
+  const [newsletterSubscribers, setNewsletterSubscribers] = useState<NewsletterSubscriber[]>([]);
+  const [adminReviews, setAdminReviews] = useState<ProductReview[]>([]);
+  const [allCatalogProducts, setAllCatalogProducts] = useState<Product[]>([]);
+
+  // Inline Quick Edit & Search State
+  const [prodSearch, setProdSearch] = useState('');
+  const [quickEdits, setQuickEdits] = useState<
+    Record<
+      string,
+      { priceKes: number; wholesalePriceKes: number; compareAtPriceKes: number; stockQty: number; isActive: boolean }
+    >
+  >({});
+  const [savingQuickId, setSavingQuickId] = useState<string | null>(null);
+  const [confirmDeleteProdId, setConfirmDeleteProdId] = useState<string | null>(null);
+
+  // Customer Edit & Search State
+  const [custSearch, setCustSearch] = useState('');
+  const [editingCustomerUid, setEditingCustomerUid] = useState<string | null>(null);
+  const [custEditForm, setCustEditForm] = useState<{
+    displayName: string;
+    accountType: 'individual' | 'contractor' | 'institution';
+    companyName: string;
+    registrationRef: string;
+    phone: string;
+    email: string;
+    defaultCounty: string;
+    defaultTown: string;
+    loyaltyPoints: number;
+    wholesaleApproved: boolean;
+  }>({
+    displayName: '',
+    accountType: 'individual',
+    companyName: '',
+    registrationRef: '',
+    phone: '',
+    email: '',
+    defaultCounty: 'Siaya',
+    defaultTown: 'Siaya Town',
+    loyaltyPoints: 0,
+    wholesaleApproved: false,
+  });
+  const [savingCustomer, setSavingCustomer] = useState(false);
+  const [confirmDeleteCustUid, setConfirmDeleteCustUid] = useState<string | null>(null);
+
+  // Newsletter & Reviews Search
+  const [newsletterSearch, setNewsletterSearch] = useState('');
+  const [reviewSearch, setReviewSearch] = useState('');
 
   // Invoice Modal
   const [invoiceTarget, setInvoiceTarget] = useState<{ order: Order; items: OrderItem[] } | null>(
@@ -148,6 +206,7 @@ export const AdminDashboardPage: React.FC = () => {
   const [prodFeatured, setProdFeatured] = useState(true);
   const [prodBestSeller, setProdBestSeller] = useState(false);
   const [prodSpecialOffer, setProdSpecialOffer] = useState(false);
+  const [prodIsActive, setProdIsActive] = useState(true);
   const [prodDescription, setProdDescription] = useState('');
   const [prodSpecsText, setProdSpecsText] = useState('KEBS Certified · Factory-Fresh Yard Stock');
   const [prodMotif, setProdMotif] = useState<VisualMotif>('cement');
@@ -203,19 +262,27 @@ export const AdminDashboardPage: React.FC = () => {
       const data = await apiFetch<{
         orders: Order[];
         quotations: QuotationRequest[];
-        customers: UserPublicProfile[];
+        customers: CustomerAdminRecord[];
         enquiries: CustomerEnquiry[];
         stockMovements: StockMovement[];
         affiliates?: AffiliateProfile[];
         affiliateReferrals?: AffiliateReferral[];
+        newsletterSubscribers?: NewsletterSubscriber[];
+        reviews?: ProductReview[];
+        allProducts?: Product[];
       }>('/api/ops/bootstrap');
       setOrders(sortNewest(data.orders || []));
       setQuotations(sortNewest(data.quotations || []));
-      setCustomers(data.customers || []);
+      setCustomers(sortNewest(data.customers || []));
       setEnquiries(sortNewest(data.enquiries || []));
       setStockMovements(sortNewest(data.stockMovements || []));
       setAffiliates(sortNewest(data.affiliates || []));
       setAffiliateReferrals(sortNewest(data.affiliateReferrals || []));
+      setNewsletterSubscribers(sortNewest(data.newsletterSubscribers || []));
+      setAdminReviews(sortNewest(data.reviews || []));
+      if (Array.isArray(data.allProducts) && data.allProducts.length > 0) {
+        setAllCatalogProducts(data.allProducts);
+      }
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Unable to load management records.', 'error');
     } finally {
@@ -348,6 +415,50 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
+  const managedProducts = useMemo(() => {
+    return allCatalogProducts.length > 0 ? allCatalogProducts : products;
+  }, [allCatalogProducts, products]);
+
+  const filteredManagedProducts = useMemo(() => {
+    const q = prodSearch.trim().toLowerCase();
+    if (!q) return managedProducts;
+    return managedProducts.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        p.categoryName.toLowerCase().includes(q)
+    );
+  }, [managedProducts, prodSearch]);
+
+  const filteredCustomers = useMemo(() => {
+    const q = custSearch.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter(
+      (c) =>
+        (c.displayName || '').toLowerCase().includes(q) ||
+        (c.phone || '').toLowerCase().includes(q) ||
+        (c.email || '').toLowerCase().includes(q) ||
+        (c.companyName || '').toLowerCase().includes(q)
+    );
+  }, [customers, custSearch]);
+
+  const filteredReviews = useMemo(() => {
+    const q = reviewSearch.trim().toLowerCase();
+    if (!q) return adminReviews;
+    return adminReviews.filter(
+      (r) =>
+        (r.productName || '').toLowerCase().includes(q) ||
+        (r.customerName || '').toLowerCase().includes(q) ||
+        (r.comment || '').toLowerCase().includes(q)
+    );
+  }, [adminReviews, reviewSearch]);
+
+  const filteredSubscribers = useMemo(() => {
+    const q = newsletterSearch.trim().toLowerCase();
+    if (!q) return newsletterSubscribers;
+    return newsletterSubscribers.filter((s) => (s.email || '').toLowerCase().includes(q));
+  }, [newsletterSubscribers, newsletterSearch]);
+
   const resetProductForm = () => {
     setEditingProductId(null);
     setProdName('');
@@ -362,6 +473,7 @@ export const AdminDashboardPage: React.FC = () => {
     setProdFeatured(true);
     setProdBestSeller(false);
     setProdSpecialOffer(false);
+    setProdIsActive(true);
     setProdBrand('KEBS Certified Kenya');
     setProdDimensions('Standard Yard Size');
     setProdWeightKg(10);
@@ -388,9 +500,11 @@ export const AdminDashboardPage: React.FC = () => {
     setProdFeatured(p.featured);
     setProdBestSeller(p.bestSeller);
     setProdSpecialOffer(p.onPromotion);
+    setProdIsActive(p.isActive !== false);
     setProdDescription(p.description);
     setProdSpecsText(p.specSummary || '');
     setProdUploadedImages(p.images || []);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
@@ -418,13 +532,18 @@ export const AdminDashboardPage: React.FC = () => {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
 
+    const rawDesc = prodDescription.trim() || prodName.trim();
+    const safeDesc = (
+      rawDesc.length >= 10 ? rawDesc : `${rawDesc} — Genuine yard supply from Delarico Kenya.`
+    ).slice(0, 2000);
+
     const payload = {
       name: prodName.trim().slice(0, 160),
       slug: (slug || `item-${Date.now()}`).slice(0, 160),
       sku: prodSku.trim().toUpperCase().slice(0, 64),
       categoryId: cat.id,
       categoryName: cat.name,
-      description: (prodDescription.trim() || prodName.trim()).slice(0, 2000),
+      description: safeDesc,
       specSummary,
       dimensions: (prodDimensions.trim() || 'Standard').slice(0, 120),
       brand: (prodBrand.trim() || 'KEBS Certified').slice(0, 100),
@@ -441,7 +560,7 @@ export const AdminDashboardPage: React.FC = () => {
       bestSeller: prodBestSeller,
       onPromotion: prodSpecialOffer,
       promoLabel: prodSpecialOffer ? 'Special Yard Offer' : '',
-      isActive: true,
+      isActive: prodIsActive,
     };
 
     try {
@@ -465,6 +584,7 @@ export const AdminDashboardPage: React.FC = () => {
         notify(`Added ${payload.name} to catalogue.`, 'success');
       }
       resetProductForm();
+      await loadOpsData();
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not save product.', 'error');
     } finally {
@@ -472,10 +592,35 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
+  const handleSaveQuickProduct = async (p: Product) => {
+    const draft = quickEdits[p.id];
+    if (!draft) return;
+    setSavingQuickId(p.id);
+    try {
+      await apiFetch(`/api/ops/products/${p.id}/quick`, {
+        method: 'PATCH',
+        body: JSON.stringify(draft),
+      });
+      notify(`Updated pricing & stock for ${p.name}.`, 'success');
+      setQuickEdits((prev) => {
+        const next = { ...prev };
+        delete next[p.id];
+        return next;
+      });
+      await loadOpsData();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Quick update failed.', 'error');
+    } finally {
+      setSavingQuickId(null);
+    }
+  };
+
   const handleDeleteProduct = async (prod: Product) => {
     try {
       await apiFetch(`/api/ops/products/${prod.id}`, { method: 'DELETE' });
+      setConfirmDeleteProdId(null);
       notify(`Removed ${prod.name} from catalogue.`, 'info');
+      await loadOpsData();
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not delete product.', 'error');
     }
@@ -565,7 +710,7 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
-  const handleToggleWholesaleCustomer = async (cust: UserPublicProfile) => {
+  const handleToggleWholesaleCustomer = async (cust: CustomerAdminRecord) => {
     try {
       await apiFetch(`/api/ops/customers/${cust.uid}/wholesale`, {
         method: 'PATCH',
@@ -578,6 +723,53 @@ export const AdminDashboardPage: React.FC = () => {
       await loadOpsData();
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not update customer status.', 'error');
+    }
+  };
+
+  const openEditCustomer = (cust: CustomerAdminRecord) => {
+    setEditingCustomerUid(cust.uid);
+    setCustEditForm({
+      displayName: cust.displayName || '',
+      accountType: cust.accountType || 'individual',
+      companyName: cust.companyName || '',
+      registrationRef: cust.registrationRef || '',
+      phone: cust.phone || '',
+      email: cust.email || '',
+      defaultCounty: cust.defaultCounty || 'Siaya',
+      defaultTown: cust.defaultTown || 'Siaya Town',
+      loyaltyPoints: cust.loyaltyPoints || 0,
+      wholesaleApproved: Boolean(cust.wholesaleApproved),
+    });
+  };
+
+  const handleSaveCustomerEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCustomerUid) return;
+    setSavingCustomer(true);
+    try {
+      await apiFetch(`/api/ops/customers/${editingCustomerUid}`, {
+        method: 'PATCH',
+        body: JSON.stringify(custEditForm),
+      });
+      notify(`Saved changes to ${custEditForm.displayName}.`, 'success');
+      setEditingCustomerUid(null);
+      await loadOpsData();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Failed to update customer account.', 'error');
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
+
+  const handleDeleteCustomer = async (uid: string, name: string) => {
+    try {
+      await apiFetch(`/api/ops/customers/${uid}`, { method: 'DELETE' });
+      setConfirmDeleteCustUid(null);
+      if (editingCustomerUid === uid) setEditingCustomerUid(null);
+      notify(`Removed account "${name}".`, 'info');
+      await loadOpsData();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not remove customer account.', 'error');
     }
   };
 
@@ -676,7 +868,7 @@ export const AdminDashboardPage: React.FC = () => {
     [
       { id: 'analytics', label: 'Overview & Analytics', icon: BarChart3 },
       { id: 'orders', label: 'Orders', icon: Package, count: orders.length },
-      { id: 'products', label: 'Products & Categories', icon: Layers, count: products.length },
+      { id: 'products', label: 'Products & Prices', icon: Layers, count: managedProducts.length },
       {
         id: 'inventory',
         label: 'Inventory & Alerts',
@@ -686,7 +878,7 @@ export const AdminDashboardPage: React.FC = () => {
       { id: 'quotations', label: 'Quotations', icon: FileText, count: quotations.length },
       {
         id: 'customers',
-        label: 'Customers & Enquiries',
+        label: 'Accounts & Enquiries',
         icon: Users,
         count: customers.length + enquiries.length,
       },
@@ -697,6 +889,13 @@ export const AdminDashboardPage: React.FC = () => {
         count: affiliates.length,
       },
       { id: 'promotions', label: 'Promotions', icon: Tag, count: promotions.length },
+      { id: 'reviews', label: 'Reviews Moderation', icon: Star, count: adminReviews.length },
+      {
+        id: 'newsletter',
+        label: 'Newsletter List',
+        icon: Mail,
+        count: newsletterSubscribers.filter((s) => s.status === 'subscribed').length,
+      },
       { id: 'financials', label: 'Financials & Invoices', icon: Wallet },
       { id: 'branches', label: 'Branches & Settings', icon: Building2, count: branches.length },
     ];
@@ -1161,7 +1360,7 @@ export const AdminDashboardPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">
                         Retail KES
@@ -1183,6 +1382,19 @@ export const AdminDashboardPage: React.FC = () => {
                         min={0}
                         value={prodWholesalePrice}
                         onChange={(e) => setProdWholesalePrice(Number(e.target.value))}
+                        className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        Compare-At KES
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={prodCompareAtPrice}
+                        onChange={(e) => setProdCompareAtPrice(Number(e.target.value))}
+                        placeholder="0"
                         className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg"
                       />
                     </div>
@@ -1220,6 +1432,33 @@ export const AdminDashboardPage: React.FC = () => {
                         value={prodLowThreshold}
                         onChange={(e) => setProdLowThreshold(Number(e.target.value))}
                         className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        Brand / Manufacturer
+                      </label>
+                      <input
+                        type="text"
+                        value={prodBrand}
+                        onChange={(e) => setProdBrand(e.target.value)}
+                        placeholder="e.g. Bamburi Cement / Devki Steel"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        Dimensions / Gauge
+                      </label>
+                      <input
+                        type="text"
+                        value={prodDimensions}
+                        onChange={(e) => setProdDimensions(e.target.value)}
+                        placeholder="e.g. 50kg Bag / 3m x 28 Gauge"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
                       />
                     </div>
                   </div>
@@ -1326,6 +1565,14 @@ export const AdminDashboardPage: React.FC = () => {
                         />
                         <span>Special Offer</span>
                       </label>
+                      <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-emerald-800">
+                        <input
+                          type="checkbox"
+                          checked={prodIsActive}
+                          onChange={(e) => setProdIsActive(e.target.checked)}
+                        />
+                        <span>Visible on Storefront</span>
+                      </label>
                     </div>
 
                     <button
@@ -1382,57 +1629,239 @@ export const AdminDashboardPage: React.FC = () => {
                   </button>
                 </form>
 
-                {/* Existing Products Table */}
-                <div className="bg-white border border-slate-200 rounded-2xl p-6">
-                  <h3 className="font-display text-base font-bold text-slate-900 mb-4">
-                    Active Catalogue ({products.length} Products)
+                {/* Existing Categories List */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                  <h3 className="font-display text-sm font-bold text-slate-900 mb-3">
+                    Active Categories ({categories.length})
                   </h3>
-                  <div className="divide-y divide-slate-100">
-                    {products.map((p) => (
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map((c) => (
                       <div
-                        key={p.id}
-                        className="py-3 flex flex-wrap items-center justify-between gap-3"
+                        key={c.id}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                       >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-11 h-11 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
-                            <ResilientImage
-                              src={p.images[0] || ''}
-                              alt={p.name}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-sm font-semibold text-slate-900 truncate">
-                              {p.name}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              {p.sku} · {p.categoryName} · Stock: {p.stockQty} {p.unit}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm font-bold tabular-nums text-navy-900">
-                            {formatKes(p.priceKes)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => populateProductForEdit(p)}
-                            className="p-1.5 text-slate-500 hover:text-royal-700"
-                            title="Edit Product"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleDeleteProduct(p)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600"
-                            title="Delete Product"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        <span className="font-semibold text-slate-800">{c.name}</span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await apiFetch(`/api/ops/categories/${c.id}`, { method: 'DELETE' });
+                              notify(`Category "${c.name}" deleted.`, 'info');
+                            } catch (err) {
+                              notify(err instanceof Error ? err.message : 'Delete failed.', 'error');
+                            }
+                          }}
+                          className="text-slate-400 hover:text-rose-600"
+                          title={`Delete ${c.name}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ))}
+                  </div>
+                </div>
+
+                {/* Existing Products Quick-Price & Catalogue Table */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-display text-base font-bold text-slate-900">
+                        Catalogue Prices, Stock &amp; Full Editing ({filteredManagedProducts.length} / {managedProducts.length})
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Adjust Retail, Wholesale, Compare-At prices or yard stock inline and click Save, or open full edit.
+                      </p>
+                    </div>
+                    <div className="relative w-full sm:w-64">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={prodSearch}
+                        onChange={(e) => setProdSearch(e.target.value)}
+                        placeholder="Search name, SKU, category..."
+                        className="w-full pl-8 pr-3 py-2 text-xs border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="divide-y divide-slate-100">
+                    {filteredManagedProducts.map((p) => {
+                      const draft = quickEdits[p.id] ?? {
+                        priceKes: p.priceKes,
+                        wholesalePriceKes: p.wholesalePriceKes,
+                        compareAtPriceKes: p.compareAtPriceKes,
+                        stockQty: p.stockQty,
+                        isActive: p.isActive !== false,
+                      };
+                      const dirty = Boolean(quickEdits[p.id]);
+                      return (
+                        <div key={p.id} className="py-3.5 space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-11 h-11 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                                <ResilientImage
+                                  src={p.images[0] || ''}
+                                  alt={p.name}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-slate-900 truncate flex items-center gap-2">
+                                  <span>{p.name}</span>
+                                  {p.isActive === false && (
+                                    <span className="text-[10px] font-bold uppercase text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded">
+                                      Hidden
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {p.sku} · {p.categoryName} · Unit: {p.unit}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {dirty && (
+                                <button
+                                  type="button"
+                                  disabled={savingQuickId === p.id}
+                                  onClick={() => void handleSaveQuickProduct(p)}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 disabled:opacity-50"
+                                >
+                                  <Save className="w-3.5 h-3.5" />
+                                  <span>{savingQuickId === p.id ? 'Saving...' : 'Save'}</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => populateProductForEdit(p)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-royal-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100"
+                                title="Edit Full Product"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>Full Edit</span>
+                              </button>
+                              {confirmDeleteProdId === p.id ? (
+                                <div className="inline-flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteProduct(p)}
+                                    className="px-2.5 py-1.5 text-xs font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-700"
+                                  >
+                                    Confirm
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteProdId(null)}
+                                    className="px-2 py-1.5 text-xs text-slate-600 hover:text-slate-900"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteProdId(p.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600"
+                                  title="Delete Product"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pl-0 sm:pl-14">
+                            <div>
+                              <label className="block text-[10px] font-medium text-slate-500">
+                                Retail KES
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={draft.priceKes}
+                                onChange={(e) =>
+                                  setQuickEdits((prev) => ({
+                                    ...prev,
+                                    [p.id]: { ...draft, priceKes: Number(e.target.value) },
+                                  }))
+                                }
+                                className="w-full px-2.5 py-1 text-xs tabular-nums border border-slate-300 rounded-md"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-medium text-slate-500">
+                                Wholesale KES
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={draft.wholesalePriceKes}
+                                onChange={(e) =>
+                                  setQuickEdits((prev) => ({
+                                    ...prev,
+                                    [p.id]: { ...draft, wholesalePriceKes: Number(e.target.value) },
+                                  }))
+                                }
+                                className="w-full px-2.5 py-1 text-xs tabular-nums border border-slate-300 rounded-md"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-medium text-slate-500">
+                                Compare-At KES
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={draft.compareAtPriceKes}
+                                onChange={(e) =>
+                                  setQuickEdits((prev) => ({
+                                    ...prev,
+                                    [p.id]: { ...draft, compareAtPriceKes: Number(e.target.value) },
+                                  }))
+                                }
+                                className="w-full px-2.5 py-1 text-xs tabular-nums border border-slate-300 rounded-md"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-medium text-slate-500">
+                                Stock ({p.unit})
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={draft.stockQty}
+                                onChange={(e) =>
+                                  setQuickEdits((prev) => ({
+                                    ...prev,
+                                    [p.id]: { ...draft, stockQty: Number(e.target.value) },
+                                  }))
+                                }
+                                className="w-full px-2.5 py-1 text-xs tabular-nums border border-slate-300 rounded-md"
+                              />
+                            </div>
+                            <div className="flex items-end">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setQuickEdits((prev) => ({
+                                    ...prev,
+                                    [p.id]: { ...draft, isActive: !draft.isActive },
+                                  }))
+                                }
+                                className={`w-full py-1 px-2 text-xs font-semibold rounded-md border ${
+                                  draft.isActive
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border-slate-300'
+                                }`}
+                              >
+                                {draft.isActive ? 'Listed: Active' : 'Listed: Hidden'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -1689,45 +2118,271 @@ export const AdminDashboardPage: React.FC = () => {
             {/* 6. CUSTOMERS & ENQUIRIES */}
             {section === 'customers' && (
               <div className="space-y-6">
-                <div className="bg-white border border-slate-200 rounded-2xl p-6">
-                  <h2 className="font-display text-lg font-bold text-slate-900 mb-4">
-                    Registered Customers &amp; Contractor Wholesale Approvals ({customers.length})
-                  </h2>
-                  {customers.length === 0 ? (
-                    <p className="text-xs text-slate-500">No registered customer profiles yet.</p>
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="font-display text-lg font-bold text-slate-900">
+                        Registered Accounts, Contractors &amp; Wholesale Control ({customers.length})
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        View customer contact numbers, approve wholesale pricing tiers, adjust loyalty points, or edit/remove accounts.
+                      </p>
+                    </div>
+                    <div className="relative w-full sm:w-64">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={custSearch}
+                        onChange={(e) => setCustSearch(e.target.value)}
+                        placeholder="Search name, phone, email..."
+                        className="w-full pl-8 pr-3 py-2 text-xs border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+
+                  {filteredCustomers.length === 0 ? (
+                    <p className="text-xs text-slate-500">No matching customer accounts found.</p>
                   ) : (
                     <div className="divide-y divide-slate-100">
-                      {customers.map((c) => (
-                        <div
-                          key={c.uid}
-                          className="py-3.5 flex flex-wrap items-center justify-between gap-3"
-                        >
-                          <div>
-                            <div className="text-sm font-bold text-slate-900">
-                              {c.displayName}{' '}
-                              <span className="text-xs font-normal text-slate-500 capitalize">
-                                · {c.accountType}
-                              </span>
+                      {filteredCustomers.map((c) => (
+                        <div key={c.uid} className="py-4 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="space-y-0.5">
+                              <div className="text-sm font-bold text-slate-900 flex flex-wrap items-center gap-2">
+                                <span>{c.displayName}</span>
+                                <span className="text-xs font-normal text-slate-500 capitalize">
+                                  · {c.accountType}
+                                </span>
+                                {c.uid === 'usr_executive_01' && (
+                                  <span className="text-[10px] font-semibold text-royal-700 bg-royal-50 px-1.5 py-0.5 rounded">
+                                    Primary Operations Account
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-slate-600 tabular-nums">
+                                {c.phone ? `Phone: ${c.phone}` : 'No phone'}
+                                {c.email ? ` · ${c.email}` : ''}
+                                {c.defaultTown ? ` · ${c.defaultTown}, ${c.defaultCounty || 'Kenya'}` : ''}
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                {c.companyName ? `${c.companyName} · ` : ''}
+                                {c.registrationRef ? `Ref: ${c.registrationRef} · ` : ''}
+                                Loyalty: <strong>{c.loyaltyPoints} pts</strong>
+                              </div>
                             </div>
-                            <div className="text-xs text-slate-500">
-                              {c.companyName ? `${c.companyName} · ` : ''}
-                              {c.registrationRef ? `Ref: ${c.registrationRef} · ` : ''}
-                              Loyalty: {c.loyaltyPoints} pts
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleToggleWholesaleCustomer(c)}
+                                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+                                  c.wholesaleApproved
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-royal-600'
+                                }`}
+                              >
+                                {c.wholesaleApproved
+                                  ? '✓ Wholesale Tier'
+                                  : 'Approve Wholesale'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  editingCustomerUid === c.uid
+                                    ? setEditingCustomerUid(null)
+                                    : openEditCustomer(c)
+                                }
+                                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-navy-900 bg-white border border-slate-200 rounded-lg hover:border-royal-600"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>{editingCustomerUid === c.uid ? 'Close' : 'Edit'}</span>
+                              </button>
+                              {c.uid !== 'usr_executive_01' &&
+                                (confirmDeleteCustUid === c.uid ? (
+                                  <div className="inline-flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDeleteCustomer(c.uid, c.displayName)}
+                                      className="px-2.5 py-1.5 text-xs font-semibold text-white bg-rose-600 rounded-lg"
+                                    >
+                                      Confirm Delete
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteCustUid(null)}
+                                      className="px-2 py-1.5 text-xs text-slate-600"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteCustUid(c.uid)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-600"
+                                    title="Delete Account"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                ))}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => void handleToggleWholesaleCustomer(c)}
-                            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
-                              c.wholesaleApproved
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-royal-600'
-                            }`}
-                          >
-                            {c.wholesaleApproved
-                              ? '✓ Wholesale Tier Active'
-                              : 'Approve Wholesale Pricing'}
-                          </button>
+
+                          {editingCustomerUid === c.uid && (
+                            <form
+                              onSubmit={handleSaveCustomerEdit}
+                              className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3"
+                            >
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    Full Name
+                                  </label>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={custEditForm.displayName}
+                                    onChange={(e) =>
+                                      setCustEditForm({ ...custEditForm, displayName: e.target.value })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    Account Type
+                                  </label>
+                                  <select
+                                    value={custEditForm.accountType}
+                                    onChange={(e) =>
+                                      setCustEditForm({
+                                        ...custEditForm,
+                                        accountType: e.target.value as 'individual' | 'contractor' | 'institution',
+                                      })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  >
+                                    <option value="individual">Individual</option>
+                                    <option value="contractor">Contractor</option>
+                                    <option value="institution">Institution</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    Loyalty Points
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={custEditForm.loyaltyPoints}
+                                    onChange={(e) =>
+                                      setCustEditForm({
+                                        ...custEditForm,
+                                        loyaltyPoints: Number(e.target.value),
+                                      })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs tabular-nums bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    Phone Number
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={custEditForm.phone}
+                                    onChange={(e) =>
+                                      setCustEditForm({ ...custEditForm, phone: e.target.value })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    Email
+                                  </label>
+                                  <input
+                                    type="email"
+                                    value={custEditForm.email}
+                                    onChange={(e) =>
+                                      setCustEditForm({ ...custEditForm, email: e.target.value })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    Company / Contractor Firm
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={custEditForm.companyName}
+                                    onChange={(e) =>
+                                      setCustEditForm({ ...custEditForm, companyName: e.target.value })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    County
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={custEditForm.defaultCounty}
+                                    onChange={(e) =>
+                                      setCustEditForm({ ...custEditForm, defaultCounty: e.target.value })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                                    Town / Delivery Zone
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={custEditForm.defaultTown}
+                                    onChange={(e) =>
+                                      setCustEditForm({ ...custEditForm, defaultTown: e.target.value })
+                                    }
+                                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </div>
+                                <div className="flex items-end">
+                                  <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer pb-1.5">
+                                    <input
+                                      type="checkbox"
+                                      checked={custEditForm.wholesaleApproved}
+                                      onChange={(e) =>
+                                        setCustEditForm({
+                                          ...custEditForm,
+                                          wholesaleApproved: e.target.checked,
+                                        })
+                                      }
+                                    />
+                                    <span>Wholesale Tier Approved</span>
+                                  </label>
+                                </div>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingCustomerUid(null)}
+                                  className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={savingCustomer}
+                                  className="px-4 py-1.5 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-royal-700 disabled:opacity-50"
+                                >
+                                  {savingCustomer ? 'Saving...' : 'Save Account Changes'}
+                                </button>
+                              </div>
+                            </form>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1859,25 +2514,302 @@ export const AdminDashboardPage: React.FC = () => {
 
                 <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3">
                   <h3 className="font-display text-base font-bold text-slate-900">
-                    Active Promotional Campaigns
+                    Active Promotional Campaigns ({promotions.length})
                   </h3>
                   {promotions.map((p) => (
                     <div
                       key={p.id}
-                      className="flex items-center justify-between py-2.5 border-b border-slate-100 last:border-0 text-xs"
+                      className="flex flex-wrap items-center justify-between gap-3 py-2.5 border-b border-slate-100 last:border-0 text-xs"
                     >
                       <div>
                         <span className="font-bold text-navy-900">{p.code}</span> — {p.title}
+                        <div className="tabular-nums text-slate-500 mt-0.5">
+                          {p.discountType === 'percentage'
+                            ? `${p.discountValue}% OFF`
+                            : `${formatKes(p.discountValue)} OFF`}{' '}
+                          (Min {formatKes(p.minOrderKes)})
+                        </div>
                       </div>
-                      <div className="tabular-nums text-slate-600">
-                        {p.discountType === 'percentage'
-                          ? `${p.discountValue}% OFF`
-                          : `${formatKes(p.discountValue)} OFF`}{' '}
-                        (Min {formatKes(p.minOrderKes)})
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await apiFetch(`/api/ops/promotions/${p.id}`, {
+                                method: 'PATCH',
+                                body: JSON.stringify({ isActive: !p.isActive }),
+                              });
+                              notify(
+                                `${p.code} ${p.isActive ? 'paused' : 'activated'}.`,
+                                'info'
+                              );
+                            } catch (err) {
+                              notify(err instanceof Error ? err.message : 'Update failed.', 'error');
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-md border font-semibold ${
+                            p.isActive
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-300'
+                          }`}
+                        >
+                          {p.isActive ? 'Active' : 'Paused'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await apiFetch(`/api/ops/promotions/${p.id}`, { method: 'DELETE' });
+                              notify(`Deleted promo ${p.code}.`, 'info');
+                            } catch (err) {
+                              notify(err instanceof Error ? err.message : 'Delete failed.', 'error');
+                            }
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-rose-600"
+                          title="Delete Promo"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* 7B. REVIEWS MODERATION */}
+            {section === 'reviews' && (
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-lg font-bold text-slate-900">
+                      Customer Ratings &amp; Reviews Moderation ({adminReviews.length})
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Publish, hide, verify buyers, or delete customer reviews; product star averages recalculate automatically.
+                    </p>
+                  </div>
+                  <div className="relative w-full sm:w-64">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={reviewSearch}
+                      onChange={(e) => setReviewSearch(e.target.value)}
+                      placeholder="Search product or reviewer..."
+                      className="w-full pl-8 pr-3 py-2 text-xs border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                </div>
+
+                {filteredReviews.length === 0 ? (
+                  <p className="text-sm text-slate-500 py-8 text-center">No customer reviews found.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {filteredReviews.map((rev) => (
+                      <div key={rev.id} className="py-3.5 flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1 max-w-xl">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="font-bold text-navy-900">{rev.productName}</span>
+                            <span className="text-gold-600 font-bold">{'★'.repeat(rev.rating)} ({rev.rating}/5)</span>
+                            {rev.status === 'hidden' && (
+                              <span className="text-[10px] font-bold uppercase text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded">
+                                Hidden
+                              </span>
+                            )}
+                            {rev.verifiedBuyer && (
+                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                Verified Buyer
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs font-semibold text-slate-800">{rev.title}</div>
+                          <p className="text-xs text-slate-600">{rev.comment}</p>
+                          <div className="text-[11px] text-slate-400">By {rev.customerName}</div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await apiFetch(`/api/ops/reviews/${rev.id}`, {
+                                  method: 'PATCH',
+                                  body: JSON.stringify({
+                                    status: rev.status === 'published' ? 'hidden' : 'published',
+                                    verifiedBuyer: rev.verifiedBuyer,
+                                  }),
+                                });
+                                await loadOpsData();
+                                notify('Updated review visibility.', 'success');
+                              } catch (err) {
+                                notify(err instanceof Error ? err.message : 'Update failed.', 'error');
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100"
+                          >
+                            {rev.status === 'published' ? (
+                              <>
+                                <EyeOff className="w-3.5 h-3.5" />
+                                <span>Hide</span>
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Publish</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await apiFetch(`/api/ops/reviews/${rev.id}`, {
+                                  method: 'PATCH',
+                                  body: JSON.stringify({
+                                    status: rev.status,
+                                    verifiedBuyer: !rev.verifiedBuyer,
+                                  }),
+                                });
+                                await loadOpsData();
+                              } catch (err) {
+                                notify(err instanceof Error ? err.message : 'Update failed.', 'error');
+                              }
+                            }}
+                            className="px-2.5 py-1.5 text-xs font-semibold text-royal-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
+                          >
+                            {rev.verifiedBuyer ? 'Unverify' : 'Verify Buyer'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await apiFetch(`/api/ops/reviews/${rev.id}`, { method: 'DELETE' });
+                                await loadOpsData();
+                                notify('Review removed.', 'info');
+                              } catch (err) {
+                                notify(err instanceof Error ? err.message : 'Delete failed.', 'error');
+                              }
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-600"
+                            title="Delete Review"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 7C. NEWSLETTER SUBSCRIBERS */}
+            {section === 'newsletter' && (
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-lg font-bold text-slate-900">
+                      Privacy-Compliant Newsletter Subscribers ({newsletterSubscribers.length})
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Opted-in marketing emails recorded with explicit Kenya Data Protection Act consent metadata.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative w-56">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={newsletterSearch}
+                        onChange={(e) => setNewsletterSearch(e.target.value)}
+                        placeholder="Search subscriber email..."
+                        className="w-full pl-8 pr-3 py-2 text-xs border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadCsv('delarico-newsletter-subscribers.csv', [
+                          ['Email', 'Status', 'Consent Accepted', 'Policy Version', 'Source'],
+                          ...newsletterSubscribers.map((s) => [
+                            s.email,
+                            s.status,
+                            s.consentAccepted ? 'YES' : 'NO',
+                            s.consentPolicyVersion,
+                            s.source,
+                          ]),
+                        ])
+                      }
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export CSV</span>
+                    </button>
+                  </div>
+                </div>
+
+                {filteredSubscribers.length === 0 ? (
+                  <p className="text-sm text-slate-500 py-8 text-center">
+                    No newsletter subscribers recorded yet.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {filteredSubscribers.map((sub) => (
+                      <div
+                        key={sub.id}
+                        className="py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+                      >
+                        <div>
+                          <div className="font-bold text-slate-900">{sub.email}</div>
+                          <div className="text-slate-500 mt-0.5">
+                            Consent: <strong>{sub.consentPolicyVersion}</strong> · Source: {sub.source}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const nextStatus = sub.status === 'subscribed' ? 'unsubscribed' : 'subscribed';
+                              try {
+                                await apiFetch(`/api/ops/newsletter/${sub.id}`, {
+                                  method: 'PATCH',
+                                  body: JSON.stringify({ status: nextStatus }),
+                                });
+                                await loadOpsData();
+                                notify(`${sub.email} marked as ${nextStatus}.`, 'info');
+                              } catch (err) {
+                                notify(err instanceof Error ? err.message : 'Update failed.', 'error');
+                              }
+                            }}
+                            className={`px-3 py-1.5 rounded-lg border font-semibold ${
+                              sub.status === 'subscribed'
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : 'bg-slate-100 text-slate-600 border-slate-300'
+                            }`}
+                          >
+                            {sub.status === 'subscribed' ? 'Subscribed' : 'Unsubscribed'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await apiFetch(`/api/ops/newsletter/${sub.id}`, { method: 'DELETE' });
+                                await loadOpsData();
+                                notify(`Removed ${sub.email} from newsletter list.`, 'info');
+                              } catch (err) {
+                                notify(err instanceof Error ? err.message : 'Delete failed.', 'error');
+                              }
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-600"
+                            title="Delete Subscriber"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowLeftRight,
   ArrowRight,
+  CheckCircle2,
   FileText,
   Heart,
   LayoutDashboard,
@@ -13,6 +14,7 @@ import {
   Minus,
   Phone,
   Plus,
+  ShieldCheck,
   ShoppingBag,
   Trash2,
   UserCheck,
@@ -55,6 +57,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     addToQuoteDraft,
     toasts,
     dismissToast,
+    notify,
   } = useStore();
 
   const location = useLocation();
@@ -63,6 +66,57 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const [searchTerm, setSearchTerm] = useState('');
   const [promoInput, setPromoInput] = useState('');
   const [cartPulse, setCartPulse] = useState(false);
+
+  // Footer newsletter state
+  const [nlEmail, setNlEmail] = useState('');
+  const [nlConsent, setNlConsent] = useState(false);
+  const [nlSubmitting, setNlSubmitting] = useState(false);
+  const [nlStatusMsg, setNlStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [nlPrivacyOpen, setNlPrivacyOpen] = useState(false);
+
+  const handleNewsletterSubscribe = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = nlEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleanEmail)) {
+      setNlStatusMsg({ type: 'error', text: 'Please enter a valid email address.' });
+      return;
+    }
+    if (!nlConsent) {
+      setNlStatusMsg({
+        type: 'error',
+        text: 'Please tick the privacy consent box before subscribing.',
+      });
+      return;
+    }
+    setNlSubmitting(true);
+    setNlStatusMsg(null);
+    try {
+      const res = await fetch('/api/newsletter/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, privacyConsent: true, source: 'footer' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = (data as { error?: string })?.error || 'Could not complete subscription.';
+        setNlStatusMsg({ type: 'error', text: msg });
+        notify(msg, 'error');
+        return;
+      }
+      const already = Boolean((data as { alreadySubscribed?: boolean })?.alreadySubscribed);
+      const okMsg = already
+        ? `${cleanEmail} is already subscribed to Delarico price & deal alerts.`
+        : `Subscribed ${cleanEmail}! Watch your inbox for price drops & promo deals.`;
+      setNlStatusMsg({ type: 'success', text: okMsg });
+      notify(okMsg, 'success');
+      setNlEmail('');
+      setNlConsent(false);
+    } catch {
+      setNlStatusMsg({ type: 'error', text: 'Network error. Please try again shortly.' });
+    } finally {
+      setNlSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -317,6 +371,15 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               >
                 Supplier Partnerships
               </Link>
+              {isAdmin && (
+                <Link
+                  to="/portal/workspace"
+                  className="py-2 text-sm font-semibold text-gold-400 hover:text-gold-300 flex items-center gap-1.5"
+                >
+                  <LayoutDashboard className="w-4 h-4" />
+                  <span>Operations Dashboard</span>
+                </Link>
+              )}
             </div>
           </div>
         )}
@@ -469,6 +532,92 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                   <Phone className="w-3.5 h-3.5" />
                   <span>Call {settings.whatsappNumber}</span>
                 </a>
+              </div>
+            </div>
+          </div>
+
+          {/* Privacy-Compliant Newsletter Subscription Strip */}
+          <div className="py-8 border-b border-slate-800">
+            <div className="bg-navy-900/90 border border-gold-500/30 rounded-2xl p-5 sm:p-6">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                <div className="lg:col-span-5 space-y-1.5">
+                  <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-gold-400 uppercase tracking-wider">
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>Hardware Price Alerts &amp; Promo Offers</span>
+                  </div>
+                  <h3 className="font-display text-base sm:text-lg font-bold text-white">
+                    Get Weekly Material Deals &amp; Yard Restock Alerts
+                  </h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Receive verified Kenyan cement, steel &amp; mabati price updates, bulk contractor rebates, and seasonal yard offers straight to your inbox.
+                  </p>
+                </div>
+
+                <form onSubmit={handleNewsletterSubscribe} className="lg:col-span-7 space-y-3">
+                  <div className="flex flex-col sm:flex-row gap-2.5">
+                    <input
+                      type="email"
+                      required
+                      value={nlEmail}
+                      onChange={(e) => setNlEmail(e.target.value)}
+                      placeholder="Enter your email address (e.g. name@company.co.ke)"
+                      aria-label="Email address for Delarico newsletter"
+                      className="flex-1 px-3.5 py-2.5 text-xs sm:text-sm bg-navy-950 text-white placeholder-slate-400 border border-slate-700 rounded-lg focus:outline-none focus:border-gold-400"
+                    />
+                    <button
+                      type="submit"
+                      disabled={nlSubmitting}
+                      className="px-5 py-2.5 text-xs sm:text-sm font-bold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 transition-colors disabled:opacity-60 whitespace-nowrap shrink-0"
+                    >
+                      {nlSubmitting ? 'Subscribing...' : 'Subscribe Now'}
+                    </button>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="flex items-start gap-2.5 text-[11px] text-slate-300 cursor-pointer select-none leading-snug">
+                      <input
+                        type="checkbox"
+                        checked={nlConsent}
+                        onChange={(e) => setNlConsent(e.target.checked)}
+                        className="mt-0.5 rounded border-slate-600 bg-navy-950 text-gold-500 focus:ring-gold-400 shrink-0"
+                      />
+                      <span>
+                        I consent to receive marketing emails and promotional offers from {settings.businessName} in compliance with the{' '}
+                        <button
+                          type="button"
+                          onClick={() => setNlPrivacyOpen((v) => !v)}
+                          className="text-gold-400 underline hover:text-gold-300 font-semibold"
+                        >
+                          Data Privacy Policy (Kenya DPA 2019)
+                        </button>
+                        . Unsubscribe anytime.
+                      </span>
+                    </label>
+
+                    {nlPrivacyOpen && (
+                      <div className="mt-1 p-3 bg-navy-950/90 border border-slate-800 rounded-lg text-[11px] text-slate-300 space-y-1">
+                        <div className="flex items-center gap-1.5 font-semibold text-gold-400">
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          <span>Data Protection &amp; Privacy Standard</span>
+                        </div>
+                        <p>
+                          We collect only your email address to send Delarico hardware price updates, restock alerts, and promotional discounts. Your address is stored securely, never sold or shared with third-party marketers, and you can withdraw consent anytime via email ({settings.email}) or unsubscribe request.
+                        </p>
+                      </div>
+                    )}
+
+                    {nlStatusMsg && (
+                      <div
+                        className={`flex items-center gap-1.5 text-xs font-medium mt-1 ${
+                          nlStatusMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
+                        {nlStatusMsg.type === 'success' && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
+                        <span>{nlStatusMsg.text}</span>
+                      </div>
+                    )}
+                  </div>
+                </form>
               </div>
             </div>
           </div>

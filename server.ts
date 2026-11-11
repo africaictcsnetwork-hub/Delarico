@@ -39,6 +39,7 @@ const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 const AUTH_SALT = 'dlr_stealth_auth_v2_8f3c19a7';
 const EXEC_SESSION_DIGESTS = [
+  '1469c34215eb0c2c85ff7cd8ec0758d0edac9e608fcb9f48bf4c4a879931f5aa', // DELARICO-ADMIN2019
   'abfa19848f6fc782ad2f25208a881ace144955cf3275fe420b543ef3cd6d02c1', // DAVID@ADMIN2019
   '17661cfc4e04fc6b48a473a06a062a0ce7cf022ebe7adb50f8463c1287a68f01', // ADMIN2019
   '4ad5705c64d099da7d331b065df28f9f49fa936584c434f328ae589d810acf4c', // ADMIN@DAVID2019
@@ -1660,20 +1661,190 @@ async function startServer() {
   });
 
   // =========================================================================
+  // Privacy-Compliant Newsletter Endpoints
+  // =========================================================================
+  app.post('/api/newsletter/subscribe', async (req: Request, res: Response) => {
+    try {
+      const rawEmail = String(req.body?.email || '').trim().toLowerCase().slice(0, 254);
+      const privacyConsent = Boolean(req.body?.privacyConsent);
+      const sourceRaw = String(req.body?.source || 'footer');
+      const source = ['footer', 'checkout', 'account'].includes(sourceRaw) ? sourceRaw : 'footer';
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(rawEmail)) {
+        res.status(400).json({ error: 'Please enter a valid email address.' });
+        return;
+      }
+      if (!privacyConsent) {
+        res.status(400).json({
+          error: 'Please tick the privacy consent box to confirm marketing updates permission.',
+        });
+        return;
+      }
+
+      const subId = `sub_${crypto.createHash('sha256').update(rawEmail).digest('hex').slice(0, 24)}`;
+      const subRef = doc(db, 'newsletterSubscribers', subId);
+      const existingSnap = await getDoc(subRef).catch(() => null);
+      const now = serverTimestamp();
+      const consentText =
+        'Opted in to Delarico price alerts, new arrivals & promotional offers under the Kenya Data Protection Act (2019).';
+
+      if (existingSnap && existingSnap.exists()) {
+        const existingData = existingSnap.data() as Record<string, unknown>;
+        if (existingData.status === 'subscribed') {
+          res.json({ ok: true, alreadySubscribed: true, email: rawEmail });
+          return;
+        }
+        await commitGatedOps([
+          {
+            type: 'update',
+            ref: subRef,
+            gateKey: `news_${subId}`,
+            data: {
+              consentAccepted: true,
+              consentPolicyVersion: 'KE-DPA-2026-v1',
+              consentText,
+              source,
+              status: 'subscribed',
+              updatedAt: now,
+            },
+          },
+        ]);
+        res.json({ ok: true, alreadySubscribed: false, email: rawEmail });
+        return;
+      }
+
+      await commitGatedOps([
+        {
+          type: 'set',
+          ref: subRef,
+          gateKey: `news_${subId}`,
+          data: {
+            email: rawEmail,
+            consentAccepted: true,
+            consentPolicyVersion: 'KE-DPA-2026-v1',
+            consentText,
+            source,
+            status: 'subscribed',
+            vaultKey: SERVER_VAULT_KEY,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      ]);
+      res.json({ ok: true, alreadySubscribed: false, email: rawEmail });
+    } catch (err) {
+      console.error('Newsletter subscribe error:', err);
+      res.status(500).json({ error: 'Unable to save subscription right now.' });
+    }
+  });
+
+  app.post('/api/newsletter/unsubscribe', async (req: Request, res: Response) => {
+    try {
+      const rawEmail = String(req.body?.email || '').trim().toLowerCase().slice(0, 254);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(rawEmail)) {
+        res.status(400).json({ error: 'Please enter a valid email address.' });
+        return;
+      }
+      const subId = `sub_${crypto.createHash('sha256').update(rawEmail).digest('hex').slice(0, 24)}`;
+      const subRef = doc(db, 'newsletterSubscribers', subId);
+      const existingSnap = await getDoc(subRef).catch(() => null);
+      if (!existingSnap || !existingSnap.exists()) {
+        res.json({ ok: true, email: rawEmail });
+        return;
+      }
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: subRef,
+          gateKey: `news_${subId}`,
+          data: {
+            status: 'unsubscribed',
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]);
+      res.json({ ok: true, email: rawEmail });
+    } catch (err) {
+      console.error('Newsletter unsubscribe error:', err);
+      res.status(500).json({ error: 'Unable to process unsubscribe request.' });
+    }
+  });
+
+  // =========================================================================
   // Protected Operations Console Endpoints (Admin Only)
   // =========================================================================
   app.get('/api/ops/bootstrap', requireAdmin, async (_req: AuthedRequest, res: Response) => {
     try {
-      const [orders, quotations, customers, enquiries, stockMovements, affiliates, affiliateReferrals] =
-        await Promise.all([
-          queryVaultDocs<Record<string, unknown>>(collection(db, 'orders')),
-          queryVaultDocs<Record<string, unknown>>(collection(db, 'quotations')),
-          queryVaultDocs<Record<string, unknown>>(collection(db, 'users')),
-          queryVaultDocs<Record<string, unknown>>(collection(db, 'enquiries')),
-          queryVaultDocs<Record<string, unknown>>(collection(db, 'stockMovements')),
-          queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliates')),
-          queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliateReferrals')),
-        ]);
+      const [
+        orders,
+        quotations,
+        rawCustomers,
+        enquiries,
+        stockMovements,
+        affiliates,
+        affiliateReferrals,
+        newsletterSubscribers,
+        pubReviewsSnap,
+        hiddenReviews,
+        activeProdsSnap,
+        inactiveProds,
+      ] = await Promise.all([
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'orders')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'quotations')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'users')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'enquiries')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'stockMovements')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliates')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliateReferrals')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'newsletterSubscribers')),
+        getDocs(query(collection(db, 'reviews'), where('status', '==', 'published'))),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'reviews'), where('status', '==', 'hidden')),
+        getDocs(query(collection(db, 'products'), where('isActive', '==', true))),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'products'), where('isActive', '==', false)),
+      ]);
+
+      // Enrich customer profiles with private contact info (for admin control panel)
+      const customers = await Promise.all(
+        rawCustomers.map(async (cust) => {
+          const uid = String(cust.uid || cust.id || '');
+          if (!uid) return cust;
+          try {
+            const contactSnap = await getDoc(doc(db, 'users', uid, 'private', 'contact'));
+            if (contactSnap.exists()) {
+              const contact = sanitizeClientDoc<Record<string, unknown>>(
+                contactSnap.id,
+                contactSnap.data()
+              );
+              return {
+                ...cust,
+                email: contact.email || '',
+                phone: contact.phone || '',
+                defaultCounty: contact.defaultCounty || '',
+                defaultTown: contact.defaultTown || '',
+                defaultStreetAddress: contact.defaultStreetAddress || '',
+              };
+            }
+          } catch {
+            // ignore missing contact doc
+          }
+          return cust;
+        })
+      );
+
+      const pubReviews = pubReviewsSnap.docs.map((d) =>
+        sanitizeClientDoc<Record<string, unknown>>(d.id, d.data())
+      );
+      const revMap = new Map<string, Record<string, unknown>>();
+      [...pubReviews, ...hiddenReviews].forEach((r) => revMap.set(String(r.id), r));
+      const reviews = Array.from(revMap.values());
+
+      const activeProds = activeProdsSnap.docs.map((d) =>
+        sanitizeClientDoc<Record<string, unknown>>(d.id, d.data())
+      );
+      const prodMap = new Map<string, Record<string, unknown>>();
+      [...activeProds, ...inactiveProds].forEach((p) => prodMap.set(String(p.id), p));
+      const allProducts = Array.from(prodMap.values());
+
       res.json({
         orders,
         quotations,
@@ -1682,6 +1853,9 @@ async function startServer() {
         stockMovements,
         affiliates,
         affiliateReferrals,
+        newsletterSubscribers,
+        reviews,
+        allProducts,
       });
     } catch (err) {
       console.error('Ops bootstrap error:', err);
@@ -1923,6 +2097,22 @@ async function startServer() {
       const prodId = String(req.body?.id || `prod-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
       const now = serverTimestamp();
       const { id: _ignore, ...payload } = req.body as Record<string, unknown>;
+      const rawDesc = String(payload.description || payload.name || '').trim();
+      const description = (
+        rawDesc.length >= 10
+          ? rawDesc
+          : `${rawDesc || 'Hardware item'} — Certified Kenyan hardware supply from Delarico.`
+      ).slice(0, 3000);
+      const rawSlug = String(payload.slug || payload.name || prodId)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+      const slug = (rawSlug.length >= 2 ? rawSlug : `item-${Date.now()}`).slice(0, 160);
+      const rawSku = String(payload.sku || `DLR-${Date.now()}`)
+        .toUpperCase()
+        .replace(/[^A-Z0-9-]+/g, '-');
+      const sku = (rawSku.length >= 2 ? rawSku : `DLR-${Date.now()}`).slice(0, 64);
+
       await commitGatedOps([
         {
           type: 'set',
@@ -1930,14 +2120,20 @@ async function startServer() {
           gateKey: `prod_${prodId}`,
           data: {
             ...payload,
-            isActive: true,
+            slug,
+            sku,
+            description,
+            isActive: payload.isActive === undefined ? true : Boolean(payload.isActive),
             ratingAvg: Number(payload.ratingAvg ?? 5.0),
             reviewCount: Number(payload.reviewCount ?? 0),
+            vaultKey: SERVER_VAULT_KEY,
             createdAt: now,
             updatedAt: now,
           },
         },
       ]);
+      cachedCatalogSummary = '';
+      cachedCatalogSummaryAt = 0;
       res.json({ ok: true, id: prodId });
     } catch (err) {
       console.error('Create product error:', err);
@@ -1949,21 +2145,72 @@ async function startServer() {
     try {
       const prodId = String(req.params.id);
       const { id: _ignore, createdAt: _ca, ...payload } = req.body as Record<string, unknown>;
+      const patchData: Record<string, unknown> = {
+        ...payload,
+        vaultKey: SERVER_VAULT_KEY,
+        updatedAt: serverTimestamp(),
+      };
+      if (typeof payload.description === 'string') {
+        const d = payload.description.trim();
+        patchData.description = (
+          d.length >= 10 ? d : `${d || 'Hardware item'} — Certified Kenyan hardware supply.`
+        ).slice(0, 3000);
+      }
       await commitGatedOps([
         {
           type: 'update',
           ref: doc(db, 'products', prodId),
           gateKey: `prod_${prodId}`,
-          data: {
-            ...payload,
-            updatedAt: serverTimestamp(),
-          },
+          data: patchData,
         },
       ]);
+      cachedCatalogSummary = '';
+      cachedCatalogSummaryAt = 0;
       res.json({ ok: true });
     } catch (err) {
       console.error('Update product error:', err);
       res.status(500).json({ error: 'Failed to update product.' });
+    }
+  });
+
+  app.patch('/api/ops/products/:id/quick', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const prodId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const prodRef = doc(db, 'products', prodId);
+      const prodSnap = await getDoc(prodRef);
+      if (!prodSnap.exists()) {
+        res.status(404).json({ error: 'Product not found.' });
+        return;
+      }
+      const updates: Record<string, unknown> = {
+        vaultKey: SERVER_VAULT_KEY,
+        updatedAt: serverTimestamp(),
+      };
+      if (req.body?.priceKes !== undefined) updates.priceKes = Math.max(0, Number(req.body.priceKes));
+      if (req.body?.wholesalePriceKes !== undefined)
+        updates.wholesalePriceKes = Math.max(0, Number(req.body.wholesalePriceKes));
+      if (req.body?.compareAtPriceKes !== undefined)
+        updates.compareAtPriceKes = Math.max(0, Number(req.body.compareAtPriceKes));
+      if (req.body?.stockQty !== undefined) updates.stockQty = Math.max(0, Number(req.body.stockQty));
+      if (req.body?.isActive !== undefined) updates.isActive = Boolean(req.body.isActive);
+      if (req.body?.onPromotion !== undefined) updates.onPromotion = Boolean(req.body.onPromotion);
+      if (req.body?.featured !== undefined) updates.featured = Boolean(req.body.featured);
+      if (req.body?.bestSeller !== undefined) updates.bestSeller = Boolean(req.body.bestSeller);
+
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: prodRef,
+          gateKey: `prod_${prodId}`,
+          data: updates,
+        },
+      ]);
+      cachedCatalogSummary = '';
+      cachedCatalogSummaryAt = 0;
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Quick update product error:', err);
+      res.status(500).json({ error: 'Failed to update product price or stock.' });
     }
   });
 
@@ -1977,6 +2224,8 @@ async function startServer() {
           gateKey: `prod_${prodId}`,
         },
       ]);
+      cachedCatalogSummary = '';
+      cachedCatalogSummaryAt = 0;
       res.json({ ok: true });
     } catch (err) {
       console.error('Delete product error:', err);
@@ -2006,6 +2255,23 @@ async function startServer() {
     } catch (err) {
       console.error('Create category error:', err);
       res.status(500).json({ error: 'Failed to create category.' });
+    }
+  });
+
+  app.delete('/api/ops/categories/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const catId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      await commitGatedOps([
+        {
+          type: 'delete',
+          ref: doc(db, 'categories', catId),
+          gateKey: `cat_${catId}`,
+        },
+      ]);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Delete category error:', err);
+      res.status(500).json({ error: 'Failed to delete category.' });
     }
   });
 
@@ -2130,6 +2396,123 @@ async function startServer() {
     }
   });
 
+  app.patch('/api/ops/customers/:uid', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const targetUid = String(req.params.uid).replace(/[^a-zA-Z0-9_-]/g, '');
+      const userRef = doc(db, 'users', targetUid);
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) {
+        res.status(404).json({ error: 'Customer account not found.' });
+        return;
+      }
+
+      const now = serverTimestamp();
+      const pubUpdates: Record<string, unknown> = { updatedAt: now };
+      if (req.body?.displayName !== undefined)
+        pubUpdates.displayName = String(req.body.displayName).trim().slice(0, 120) || 'Customer';
+      if (req.body?.accountType !== undefined) {
+        const at = String(req.body.accountType);
+        pubUpdates.accountType = ['individual', 'contractor', 'institution'].includes(at)
+          ? at
+          : 'individual';
+      }
+      if (req.body?.companyName !== undefined)
+        pubUpdates.companyName = String(req.body.companyName).trim().slice(0, 160);
+      if (req.body?.registrationRef !== undefined)
+        pubUpdates.registrationRef = String(req.body.registrationRef).trim().slice(0, 80);
+      if (req.body?.wholesaleApproved !== undefined)
+        pubUpdates.wholesaleApproved = Boolean(req.body.wholesaleApproved);
+      if (req.body?.loyaltyPoints !== undefined)
+        pubUpdates.loyaltyPoints = Math.max(0, Math.round(Number(req.body.loyaltyPoints || 0)));
+
+      const ops: GatedWriteOp[] = [
+        {
+          type: 'update',
+          ref: userRef,
+          gateKey: `usr_${targetUid}`,
+          data: pubUpdates,
+        },
+      ];
+
+      const contactRef = doc(db, 'users', targetUid, 'private', 'contact');
+      const contactSnap = await getDoc(contactRef).catch(() => null);
+      if (
+        contactSnap &&
+        contactSnap.exists() &&
+        (req.body?.email !== undefined ||
+          req.body?.phone !== undefined ||
+          req.body?.defaultCounty !== undefined ||
+          req.body?.defaultTown !== undefined)
+      ) {
+        const privUpdates: Record<string, unknown> = { updatedAt: now };
+        if (req.body?.email !== undefined)
+          privUpdates.email = String(req.body.email).trim().slice(0, 254) || 'customer@delarico.co.ke';
+        if (req.body?.phone !== undefined)
+          privUpdates.phone = String(req.body.phone).trim().slice(0, 30);
+        if (req.body?.defaultCounty !== undefined)
+          privUpdates.defaultCounty = String(req.body.defaultCounty).trim().slice(0, 80);
+        if (req.body?.defaultTown !== undefined)
+          privUpdates.defaultTown = String(req.body.defaultTown).trim().slice(0, 80);
+
+        ops.push({
+          type: 'update',
+          ref: contactRef,
+          gateKey: `usrpriv_${targetUid}_contact`,
+          data: privUpdates,
+        });
+      }
+
+      await commitGatedOps(ops);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Update customer error:', err);
+      res.status(500).json({ error: 'Failed to update customer account.' });
+    }
+  });
+
+  app.delete('/api/ops/customers/:uid', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const targetUid = String(req.params.uid).replace(/[^a-zA-Z0-9_-]/g, '');
+      if (targetUid === 'usr_executive_01') {
+        res.status(400).json({ error: 'Cannot delete primary operations account.' });
+        return;
+      }
+
+      const ops: GatedWriteOp[] = [];
+      const contactRef = doc(db, 'users', targetUid, 'private', 'contact');
+      const contactSnap = await getDoc(contactRef).catch(() => null);
+      if (contactSnap && contactSnap.exists()) {
+        const phone = String(contactSnap.data()?.phone || '');
+        const norm = normalizeKenyanPhone(phone);
+        if (norm) {
+          const acctId = makeAccountIdFromPhone(norm);
+          ops.push({
+            type: 'delete',
+            ref: doc(db, 'authAccounts', acctId),
+            gateKey: `auth_${acctId}`,
+          });
+        }
+        ops.push({
+          type: 'delete',
+          ref: contactRef,
+          gateKey: `usrpriv_${targetUid}_contact`,
+        });
+      }
+
+      ops.push({
+        type: 'delete',
+        ref: doc(db, 'users', targetUid),
+        gateKey: `usr_${targetUid}`,
+      });
+
+      await commitGatedOps(ops);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Delete customer error:', err);
+      res.status(500).json({ error: 'Failed to delete customer account.' });
+    }
+  });
+
   app.patch('/api/ops/enquiries/:id/reply', requireAdmin, async (req: AuthedRequest, res: Response) => {
     try {
       const enqId = String(req.params.id);
@@ -2153,6 +2536,170 @@ async function startServer() {
     }
   });
 
+  app.patch('/api/ops/reviews/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const revId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const revRef = doc(db, 'reviews', revId);
+      const revSnap = await getDoc(revRef);
+      if (!revSnap.exists()) {
+        res.status(404).json({ error: 'Review not found.' });
+        return;
+      }
+      const rData = revSnap.data();
+      const nextStatus = req.body?.status === 'hidden' ? 'hidden' : 'published';
+      const verifiedBuyer =
+        req.body?.verifiedBuyer !== undefined ? Boolean(req.body.verifiedBuyer) : Boolean(rData.verifiedBuyer);
+      const now = serverTimestamp();
+
+      const ops: GatedWriteOp[] = [
+        {
+          type: 'update',
+          ref: revRef,
+          gateKey: `rev_${revId}`,
+          data: {
+            status: nextStatus,
+            verifiedBuyer,
+            vaultKey: SERVER_VAULT_KEY,
+            updatedAt: now,
+          },
+        },
+      ];
+
+      const productId = String(rData.productId || '');
+      if (productId) {
+        const prodRef = doc(db, 'products', productId);
+        const [prodSnap, pubRevsSnap] = await Promise.all([
+          getDoc(prodRef),
+          getDocs(
+            query(
+              collection(db, 'reviews'),
+              where('productId', '==', productId),
+              where('status', '==', 'published')
+            )
+          ),
+        ]);
+        if (prodSnap.exists()) {
+          const ratingMap = new Map<string, number>();
+          pubRevsSnap.docs.forEach((d) => ratingMap.set(d.id, Number(d.data()?.rating || 5)));
+          if (nextStatus === 'published') {
+            ratingMap.set(revId, Number(rData.rating || 5));
+          } else {
+            ratingMap.delete(revId);
+          }
+          const activeRatings = Array.from(ratingMap.values());
+          const reviewCount = activeRatings.length;
+          const ratingAvg =
+            reviewCount > 0
+              ? Number((activeRatings.reduce((a, b) => a + b, 0) / reviewCount).toFixed(1))
+              : 5.0;
+          ops.push({
+            type: 'update',
+            ref: prodRef,
+            gateKey: `prod_${productId}`,
+            data: { ratingAvg, reviewCount, updatedAt: now },
+          });
+        }
+      }
+
+      await commitGatedOps(ops);
+      res.json({ ok: true, status: nextStatus, verifiedBuyer });
+    } catch (err) {
+      console.error('Moderate review error:', err);
+      res.status(500).json({ error: 'Failed to update review.' });
+    }
+  });
+
+  app.delete('/api/ops/reviews/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const revId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const revRef = doc(db, 'reviews', revId);
+      const revSnap = await getDoc(revRef);
+      const ops: GatedWriteOp[] = [
+        {
+          type: 'delete',
+          ref: revRef,
+          gateKey: `rev_${revId}`,
+        },
+      ];
+      if (revSnap.exists()) {
+        const productId = String(revSnap.data()?.productId || '');
+        if (productId) {
+          const prodRef = doc(db, 'products', productId);
+          const [prodSnap, revsSnap] = await Promise.all([
+            getDoc(prodRef),
+            getDocs(
+              query(
+                collection(db, 'reviews'),
+                where('productId', '==', productId),
+                where('status', '==', 'published')
+              )
+            ),
+          ]);
+          if (prodSnap.exists()) {
+            const activeRatings = revsSnap.docs
+              .filter((d) => d.id !== revId)
+              .map((d) => Number(d.data()?.rating || 5));
+            const reviewCount = activeRatings.length;
+            const ratingAvg =
+              reviewCount > 0
+                ? Number((activeRatings.reduce((a, b) => a + b, 0) / reviewCount).toFixed(1))
+                : 5.0;
+            ops.push({
+              type: 'update',
+              ref: prodRef,
+              gateKey: `prod_${productId}`,
+              data: { ratingAvg, reviewCount, updatedAt: serverTimestamp() },
+            });
+          }
+        }
+      }
+      await commitGatedOps(ops);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Delete review error:', err);
+      res.status(500).json({ error: 'Failed to delete review.' });
+    }
+  });
+
+  app.patch('/api/ops/newsletter/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const subId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const status = req.body?.status === 'unsubscribed' ? 'unsubscribed' : 'subscribed';
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: doc(db, 'newsletterSubscribers', subId),
+          gateKey: `news_${subId}`,
+          data: {
+            status,
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]);
+      res.json({ ok: true, status });
+    } catch (err) {
+      console.error('Update subscriber error:', err);
+      res.status(500).json({ error: 'Failed to update subscriber.' });
+    }
+  });
+
+  app.delete('/api/ops/newsletter/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const subId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      await commitGatedOps([
+        {
+          type: 'delete',
+          ref: doc(db, 'newsletterSubscribers', subId),
+          gateKey: `news_${subId}`,
+        },
+      ]);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Delete subscriber error:', err);
+      res.status(500).json({ error: 'Failed to delete subscriber.' });
+    }
+  });
+
   app.post('/api/ops/promotions', requireAdmin, async (req: AuthedRequest, res: Response) => {
     try {
       const promoId = String(req.body?.id || `promo-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
@@ -2171,10 +2718,58 @@ async function startServer() {
           },
         },
       ]);
+      cachedCatalogSummary = '';
+      cachedCatalogSummaryAt = 0;
       res.json({ ok: true, id: promoId });
     } catch (err) {
       console.error('Create promo error:', err);
       res.status(500).json({ error: 'Failed to create promotion.' });
+    }
+  });
+
+  app.patch('/api/ops/promotions/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const promoId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const promoRef = doc(db, 'promotions', promoId);
+      const updates: Record<string, unknown> = { updatedAt: serverTimestamp() };
+      if (req.body?.isActive !== undefined) updates.isActive = Boolean(req.body.isActive);
+      if (req.body?.discountValue !== undefined)
+        updates.discountValue = Math.max(1, Number(req.body.discountValue));
+      if (req.body?.minOrderKes !== undefined)
+        updates.minOrderKes = Math.max(0, Number(req.body.minOrderKes));
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: promoRef,
+          gateKey: `promo_${promoId}`,
+          data: updates,
+        },
+      ]);
+      cachedCatalogSummary = '';
+      cachedCatalogSummaryAt = 0;
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Update promo error:', err);
+      res.status(500).json({ error: 'Failed to update promotion.' });
+    }
+  });
+
+  app.delete('/api/ops/promotions/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const promoId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      await commitGatedOps([
+        {
+          type: 'delete',
+          ref: doc(db, 'promotions', promoId),
+          gateKey: `promo_${promoId}`,
+        },
+      ]);
+      cachedCatalogSummary = '';
+      cachedCatalogSummaryAt = 0;
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Delete promo error:', err);
+      res.status(500).json({ error: 'Failed to delete promotion.' });
     }
   });
 

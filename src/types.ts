@@ -313,3 +313,24 @@ export interface AffiliateReferral {
   createdAt?: Timestamp | string;
   updatedAt?: Timestamp | string;
 }
+
+export interface CustomerAdminRecord extends UserPublicProfile {
+  email?: string;
+  phone?: string;
+  defaultCounty?: string;
+  defaultTown?: string;
+  defaultStreetAddress?: string;
+}
+
+export interface NewsletterSubscriber {
+  id: string;
+  email: string;
+  consentAccepted: boolean;
+  consentPolicyVersion: string;
+  consentText: string;
+  source: 'footer' | 'checkout' | 'account';
+  status: 'subscribed' | 'unsubscribed';
+  createdAt?: Timestamp | string;
+  updatedAt?: Timestamp | string;
+}
+

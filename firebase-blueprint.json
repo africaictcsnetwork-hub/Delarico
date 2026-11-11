@@ -84,6 +84,7 @@
         "isActive": { "type": "boolean" },
         "ratingAvg": { "type": "number" },
         "reviewCount": { "type": "number" },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -273,6 +274,7 @@
         "comment": { "type": "string", "minLength": 5, "maxLength": 1500 },
         "verifiedBuyer": { "type": "boolean" },
         "status": { "type": "string", "enum": ["published", "hidden"] },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -441,6 +443,26 @@
         "buyerFirstName", "orderTotalKes", "commissionRatePct", "commissionKes",
         "status", "createdAt", "updatedAt"
       ]
+    },
+    "NewsletterSubscriber": {
+      "title": "NewsletterSubscriber",
+      "description": "Opted-in marketing newsletter subscriber record with explicit data privacy consent metadata.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 254 },
+        "consentAccepted": { "type": "boolean" },
+        "consentPolicyVersion": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "consentText": { "type": "string", "minLength": 10, "maxLength": 400 },
+        "source": { "type": "string", "enum": ["footer", "checkout", "account"] },
+        "status": { "type": "string", "enum": ["subscribed", "unsubscribed"] },
+        "vaultKey": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "email", "consentAccepted", "consentPolicyVersion", "consentText",
+        "source", "status", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -523,6 +545,10 @@
     "/affiliateReferrals/{referralId}": {
       "schema": { "$ref": "#/entities/AffiliateReferral" },
       "description": "Tracked affiliate order referrals and 3-5% commissions."
+    },
+    "/newsletterSubscribers/{subscriberId}": {
+      "schema": { "$ref": "#/entities/NewsletterSubscriber" },
+      "description": "Privacy-compliant marketing newsletter subscribers."
     }
   }
 }
