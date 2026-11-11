@@ -1,8 +1,8 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  ArrowLeftRight,
+  Check,
   CheckCircle2,
   Heart,
   MessageCircle,
@@ -11,7 +11,6 @@ import {
   ShoppingBag,
   Star,
   Truck,
-  Zap,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { buildProductEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
@@ -20,7 +19,6 @@ import { ProductCard } from '../components/ProductCard';
 
 export const ProductDetailPage: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
-  const navigate = useNavigate();
   const reviewsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const {
@@ -29,10 +27,9 @@ export const ProductDetailPage: React.FC = () => {
     products,
     reviews,
     settings,
+    cart,
     addToCart,
     getEffectiveUnitPrice,
-    compareIds,
-    toggleCompare,
     favouriteIds,
     toggleFavourite,
     apiFetch,
@@ -46,17 +43,36 @@ export const ProductDetailPage: React.FC = () => {
 
   const [selectedImageIdx, setSelectedImageIdx] = useState(0);
   const [quantity, setQuantity] = useState(1);
+  const [addedFeedback, setAddedFeedback] = useState(false);
   const [rating, setRating] = useState(5);
   const [hoverRating, setHoverRating] = useState(0);
+  const [reviewerName, setReviewerName] = useState(
+    () => userProfile?.displayName || user?.displayName || ''
+  );
   const [reviewTitle, setReviewTitle] = useState('');
   const [reviewComment, setReviewComment] = useState('');
+  const [ratingFilter, setRatingFilter] = useState<'all' | '5' | '4' | '3below'>('all');
   const [submittingReview, setSubmittingReview] = useState(false);
+
+  useEffect(() => {
+    const autoName = userProfile?.displayName || user?.displayName || '';
+    if (autoName && !reviewerName) {
+      setReviewerName(autoName);
+    }
+  }, [userProfile, user]);
 
   // Compute live reviews & dynamic stars for this product
   const productReviews = useMemo(
     () => (product ? reviews.filter((r) => r.productId === product.id) : []),
     [reviews, product]
   );
+
+  const filteredReviews = useMemo(() => {
+    if (ratingFilter === '5') return productReviews.filter((r) => r.rating === 5);
+    if (ratingFilter === '4') return productReviews.filter((r) => r.rating === 4);
+    if (ratingFilter === '3below') return productReviews.filter((r) => r.rating <= 3);
+    return productReviews;
+  }, [productReviews, ratingFilter]);
 
   const { effectiveRating, totalReviewCount, ratingBreakdown } = useMemo(() => {
     if (!product) {
@@ -110,7 +126,6 @@ export const ProductDetailPage: React.FC = () => {
   const isWholesaleApplied = effectiveUnitPrice < product.priceKes;
   const lineTotal = effectiveUnitPrice * quantity;
   const isFav = favouriteIds.includes(product.id);
-  const isCompared = compareIds.includes(product.id);
 
   const relatedProducts = products
     .filter((p) => p.isActive && p.categoryId === product.categoryId && p.id !== product.id)
@@ -123,12 +138,19 @@ export const ProductDetailPage: React.FC = () => {
 
   const handleReviewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) {
-      navigate(`/account?redirect=${encodeURIComponent(`/product/${product.slug}`)}`);
+    const effectiveName = (
+      reviewerName ||
+      userProfile?.displayName ||
+      user?.displayName ||
+      ''
+    ).trim();
+
+    if (effectiveName.length < 2) {
+      notify('Please enter your name or company name to post a review.', 'error');
       return;
     }
     if (reviewTitle.trim().length < 2 || reviewComment.trim().length < 5) {
-      notify('Please enter a review title and details (at least 5 characters).', 'error');
+      notify('Please enter a review headline and details (at least 5 characters).', 'error');
       return;
     }
     setSubmittingReview(true);
@@ -138,7 +160,7 @@ export const ProductDetailPage: React.FC = () => {
         body: JSON.stringify({
           productId: product.id,
           productName: product.name,
-          customerName: userProfile?.displayName || user.displayName || 'Customer',
+          customerName: effectiveName,
           rating,
           title: reviewTitle.trim(),
           comment: reviewComment.trim(),
@@ -146,7 +168,7 @@ export const ProductDetailPage: React.FC = () => {
       });
       setReviewTitle('');
       setReviewComment('');
-      notify('Thank you! Your star rating & review have been submitted.', 'success');
+      notify('Thank you! Your star rating & review have been published.', 'success');
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Failed to publish review.', 'error');
     } finally {
@@ -177,6 +199,7 @@ export const ProductDetailPage: React.FC = () => {
             <ResilientImage
               src={product.images[selectedImageIdx] || product.images[0]}
               alt={`${product.name} — view ${selectedImageIdx + 1}`}
+              eager
               className="w-full h-full object-cover"
             />
           </div>
@@ -316,33 +339,50 @@ export const ProductDetailPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Buy Buttons */}
-          <div className="space-y-2 pt-1">
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  addToCart(product, quantity);
-                  navigate('/checkout');
-                }}
-                disabled={product.stockQty <= 0}
-                className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 px-3 text-xs font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 disabled:bg-slate-200 transition-colors"
+          {/* Jumia Single Add to Cart Button + Quantity */}
+          <div className="space-y-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                if (product.stockQty <= 0) return;
+                addToCart(product, quantity);
+                setAddedFeedback(true);
+                setTimeout(() => setAddedFeedback(false), 2000);
+              }}
+              disabled={product.stockQty <= 0}
+              className={`w-full inline-flex items-center justify-center gap-2 py-3 px-4 text-xs sm:text-sm font-bold rounded-xl transition-all shadow-xs uppercase tracking-wide ${
+                addedFeedback
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-gold-500 hover:bg-gold-400 text-navy-950 disabled:bg-slate-200 disabled:text-slate-400'
+              }`}
+            >
+              {addedFeedback ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Added ({quantity}) to Cart!</span>
+                </>
+              ) : (
+                <>
+                  <ShoppingBag className="w-4 h-4" />
+                  <span>{product.stockQty <= 0 ? 'Out of Stock' : `Add to Cart (${quantity})`}</span>
+                </>
+              )}
+            </button>
+
+            {/* Quick Link to Checkout on Cart */}
+            <div className="flex items-center justify-between text-xs px-1">
+              <Link
+                to="/checkout"
+                className="font-semibold text-royal-700 hover:text-royal-900 hover:underline flex items-center gap-1"
               >
-                <Zap className="w-4 h-4" />
-                <span>Buy Now</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => addToCart(product, quantity)}
-                disabled={product.stockQty <= 0}
-                className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 px-3 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 disabled:bg-slate-300 transition-colors"
-              >
-                <ShoppingBag className="w-4 h-4" />
-                <span>Add to Cart</span>
-              </button>
+                <span>View Cart &amp; Checkout ({cart.reduce((s, i) => s + i.quantity, 0)} items)</span>
+                <span>&rarr;</span>
+              </Link>
+              <span className="text-slate-400">·</span>
+              <span className="text-slate-500">M-Pesa · COD</span>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-2 pt-1">
               <a
                 href={waUrl}
                 target="_blank"
@@ -468,17 +508,47 @@ export const ProductDetailPage: React.FC = () => {
               })}
             </div>
 
-            {/* Reviews List */}
+            {/* Reviews List & Rating Filter */}
             <div className="space-y-3 pt-2">
-              <h3 className="text-xs font-bold text-navy-900 uppercase tracking-wide">
-                Recent Reviews ({productReviews.length})
-              </h3>
-              {productReviews.length === 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-bold text-navy-900 uppercase tracking-wide">
+                  Recent Reviews ({filteredReviews.length})
+                </h3>
+                {productReviews.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    {(
+                      [
+                        { id: 'all', label: 'All' },
+                        { id: '5', label: '5★' },
+                        { id: '4', label: '4★' },
+                        { id: '3below', label: '3★ & below' },
+                      ] as const
+                    ).map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setRatingFilter(tab.id)}
+                        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+                          ratingFilter === tab.id
+                            ? 'bg-navy-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {filteredReviews.length === 0 ? (
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500">
-                  No written reviews yet for this product. Be the first to leave a review below!
+                  {productReviews.length === 0
+                    ? 'No written reviews yet for this product. Be the first to leave a review!'
+                    : 'No reviews matched the selected star filter.'}
                 </div>
               ) : (
-                productReviews.map((rev) => (
+                filteredReviews.map((rev) => (
                   <div key={rev.id} className="p-4 border border-slate-200 rounded-lg space-y-1.5 bg-white">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-0.5 text-amber-400">
@@ -557,6 +627,21 @@ export const ProductDetailPage: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Your Name or Site Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={80}
+                  value={reviewerName}
+                  onChange={(e) => setReviewerName(e.target.value)}
+                  placeholder="e.g. Otieno Builders / Eng. Mwangi"
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-royal-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Headline / Title *
                 </label>
                 <input
@@ -590,11 +675,7 @@ export const ProductDetailPage: React.FC = () => {
                 disabled={submittingReview}
                 className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 disabled:opacity-50 transition-colors"
               >
-                {user ? (
-                  submittingReview ? 'Submitting...' : 'Submit Star Rating & Review'
-                ) : (
-                  'Sign In to Submit Review'
-                )}
+                {submittingReview ? 'Submitting...' : 'Submit Star Rating & Review'}
               </button>
             </form>
           </div>

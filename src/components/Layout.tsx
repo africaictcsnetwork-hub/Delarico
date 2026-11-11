@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowLeftRight,
+  ArrowRight,
   FileText,
+  Heart,
   LayoutDashboard,
   Mail,
   MapPin,
@@ -11,15 +13,15 @@ import {
   Minus,
   Phone,
   Plus,
-  Search,
   ShoppingBag,
   Trash2,
   UserCheck,
   X,
 } from 'lucide-react';
-import { OFFICIAL_LOGO_PATH } from '../firebase';
+import { NAV_LOGO_PATH } from '../firebase';
 import { useStore } from '../context/StoreContext';
 import { buildCartEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
+import { QuickSearchBar } from './QuickSearchBar';
 import { ResilientImage } from './ResilientImage';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -29,9 +31,11 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     userProfile,
     settings,
     categories,
+    products,
     cart,
     isCartOpen,
     setIsCartOpen,
+    addToCart,
     updateCartQty,
     removeFromCart,
     getEffectiveUnitPrice,
@@ -41,6 +45,11 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     applyPromoCode,
     removePromoCode,
     compareIds,
+    favouriteIds,
+    toggleFavourite,
+    clearSavedItems,
+    isWishlistOpen,
+    setIsWishlistOpen,
     quoteDraft,
     addToQuoteDraft,
     toasts,
@@ -59,12 +68,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   }, [location.pathname]);
 
   const totalCartItems = cart.reduce((sum, item) => sum + item.quantity, 0);
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const q = searchTerm.trim();
-    navigate(q ? `/products?q=${encodeURIComponent(q)}` : '/products');
-  };
+  const savedProducts = products.filter((p) => p.isActive && favouriteIds.includes(p.id));
 
   const directWaUrl = buildWhatsAppUrl(
     `Hello ${settings.businessName}, I am visiting your website and would like assistance with building materials and pricing.`,
@@ -96,8 +100,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           >
             <span className="bg-white rounded-md p-1 flex items-center justify-center shadow-xs">
               <img
-                src={OFFICIAL_LOGO_PATH}
+                src={NAV_LOGO_PATH}
                 alt="DELARICO Official Logo"
+                loading="eager"
+                decoding="async"
                 className="h-8 w-8 object-contain"
               />
             </span>
@@ -159,6 +165,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 </Link>
               ))}
               <Link
+                to="/saved"
+                className="py-2 text-sm font-medium text-gold-400 hover:text-gold-300"
+              >
+                Saved Items ({favouriteIds.length})
+              </Link>
+              <Link
                 to="/services"
                 className="py-2 text-sm font-medium text-slate-200 hover:text-gold-400"
               >
@@ -204,21 +216,25 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         )}
       </header>
 
-      {/* Storefront Utility Toolbar (Search, Compare, Account, Cart) */}
+      {/* Storefront Utility Toolbar (Quick Search, Saved Items, Compare, Account, Cart) */}
       <div className="no-print bg-slate-50 border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
-          <form onSubmit={handleSearchSubmit} className="flex-1 min-w-[220px] max-w-md relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="search"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search Bamburi cement, Mabati G28, Cypress 4x2, Y12 steel..."
-              className="w-full pl-10 pr-4 py-2 text-xs sm:text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-royal-600"
-            />
-          </form>
+          <QuickSearchBar searchTerm={searchTerm} setSearchTerm={setSearchTerm} />
 
-          <div className="flex items-center flex-wrap gap-2 sm:gap-3">
+          <div className="flex items-center flex-wrap gap-2 sm:gap-2.5">
+            <button
+              type="button"
+              onClick={() => setIsWishlistOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-slate-300 whitespace-nowrap shrink-0"
+            >
+              <Heart
+                className={`w-3.5 h-3.5 ${
+                  favouriteIds.length > 0 ? 'fill-gold-500 text-gold-500' : 'text-navy-900'
+                }`}
+              />
+              <span>Saved ({favouriteIds.length})</span>
+            </button>
+
             <Link
               to="/compare"
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-slate-300 whitespace-nowrap shrink-0"
@@ -291,8 +307,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <div className="flex items-center gap-3">
                 <div className="bg-white rounded-lg p-1.5 shrink-0">
                   <img
-                    src={OFFICIAL_LOGO_PATH}
+                    src={NAV_LOGO_PATH}
                     alt="DELARICO Logo"
+                    loading="lazy"
+                    decoding="async"
                     className="w-12 h-12 object-contain"
                   />
                 </div>
@@ -678,6 +696,139 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                       <span>Bulk Quote</span>
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Slide-Over Saved Items / Wishlist Drawer */}
+      {isWishlistOpen && (
+        <div className="no-print fixed inset-0 z-50 flex justify-end bg-slate-950/50">
+          <div className="w-full max-w-md bg-white h-full flex flex-col shadow-2xl border-l border-slate-200">
+            <div className="flex items-center justify-between px-6 py-4 bg-navy-900 text-white">
+              <div className="flex items-center gap-2">
+                <Heart className="w-4 h-4 text-gold-400 fill-gold-400" />
+                <h2 className="text-sm font-semibold">Saved Materials ({savedProducts.length})</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsWishlistOpen(false)}
+                aria-label="Close saved items drawer"
+                className="p-1 text-slate-300 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {savedProducts.length === 0 ? (
+                <div className="text-center py-14 space-y-3">
+                  <Heart className="w-10 h-10 text-slate-300 mx-auto" />
+                  <p className="text-sm font-medium text-slate-700">No saved items yet.</p>
+                  <p className="text-xs text-slate-500">
+                    Tap the heart icon on any cement, mabati, timber, or steel item to bookmark it here for later.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsWishlistOpen(false);
+                      navigate('/products');
+                    }}
+                    className="mt-2 inline-flex items-center px-4 py-2 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800"
+                  >
+                    Browse Hardware Catalogue
+                  </button>
+                </div>
+              ) : (
+                savedProducts.map((product) => (
+                  <div
+                    key={product.id}
+                    className="flex gap-3.5 pb-4 border-b border-slate-100"
+                  >
+                    <Link
+                      to={`/product/${product.slug}`}
+                      onClick={() => setIsWishlistOpen(false)}
+                      className="w-18 h-18 rounded-lg overflow-hidden bg-slate-50 border border-slate-200 shrink-0"
+                    >
+                      <ResilientImage
+                        src={product.images[0]}
+                        alt={product.name}
+                        eager
+                        className="w-full h-full object-cover"
+                      />
+                    </Link>
+                    <div className="flex-1 min-w-0">
+                      <Link
+                        to={`/product/${product.slug}`}
+                        onClick={() => setIsWishlistOpen(false)}
+                        className="text-xs font-semibold text-slate-900 hover:text-royal-700 line-clamp-2"
+                      >
+                        {product.name}
+                      </Link>
+                      <p className="text-xs font-bold text-navy-900 tabular-nums mt-0.5">
+                        {formatKes(product.priceKes)}{' '}
+                        <span className="font-normal text-slate-500">/ {product.unit}</span>
+                      </p>
+
+                      <div className="flex items-center gap-2 mt-2.5">
+                        <button
+                          type="button"
+                          onClick={() => addToCart(product, 1)}
+                          disabled={product.stockQty <= 0}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-bold text-navy-950 bg-gold-500 rounded-md hover:bg-gold-400 disabled:bg-slate-200 disabled:text-slate-400"
+                        >
+                          <ShoppingBag className="w-3 h-3" />
+                          <span>{product.stockQty <= 0 ? 'Out of Stock' : 'Add to Cart'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleFavourite(product.id)}
+                          aria-label={`Remove ${product.name} from saved items`}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {savedProducts.length > 0 && (
+              <div className="p-6 bg-slate-50 border-t border-slate-200 space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    savedProducts.forEach((p) => {
+                      if (p.stockQty > 0) addToCart(p, 1);
+                    });
+                    setIsWishlistOpen(false);
+                    setIsCartOpen(true);
+                  }}
+                  className="w-full py-2.5 px-4 text-xs font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 transition-colors"
+                >
+                  Move All to Cart
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Link
+                    to="/saved"
+                    onClick={() => setIsWishlistOpen(false)}
+                    className="inline-flex items-center justify-center gap-1 py-2 px-3 text-xs font-semibold text-navy-900 bg-white border border-slate-200 rounded-lg hover:bg-slate-100"
+                  >
+                    <span>Full Saved Page</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => clearSavedItems()}
+                    className="inline-flex items-center justify-center gap-1 py-2 px-3 text-xs font-semibold text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear List</span>
+                  </button>
                 </div>
               </div>
             )}

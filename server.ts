@@ -24,6 +24,7 @@ import {
   INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
   INITIAL_PROMOTIONS,
+  INITIAL_REVIEWS,
 } from './src/data/seedCatalog.ts';
 import { getProductCommissionRatePct, normalizeKenyanPhone } from './src/utils/whatsapp.ts';
 
@@ -254,6 +255,27 @@ async function syncCatalogToFirestore(force = false): Promise<void> {
         tankData.images[0] === '/assets/materials/water-tank.jpg';
 
       if (hasUpdatedPhone && hasDedicatedKenyanPhotos) {
+        // Ensure initial Kenyan customer reviews are seeded if none exist yet
+        const revSnap = await getDocs(query(collection(db, 'reviews'), where('status', '==', 'published')));
+        if (revSnap.empty) {
+          const revNow = serverTimestamp();
+          const revOps: GatedWriteOp[] = INITIAL_REVIEWS.map((r) => {
+            const { id, ...rest } = r;
+            return {
+              type: 'set',
+              ref: doc(db, 'reviews', id),
+              gateKey: `rev_${id}`,
+              data: {
+                ...rest,
+                verifiedBuyer: false,
+                status: 'published',
+                createdAt: revNow,
+                updatedAt: revNow,
+              },
+            };
+          });
+          await commitGatedOps(revOps);
+        }
         return;
       }
     }
@@ -322,6 +344,25 @@ async function syncCatalogToFirestore(force = false): Promise<void> {
           ? { type: 'update', ref, gateKey: `branch_${id}`, data: { ...rest, updatedAt: now } }
           : { type: 'set', ref, gateKey: `branch_${id}`, data: { ...rest, createdAt: now, updatedAt: now } }
       );
+    }
+    for (const rev of INITIAL_REVIEWS) {
+      const { id, ...rest } = rev;
+      const ref = doc(db, 'reviews', id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        miscOps.push({
+          type: 'set',
+          ref,
+          gateKey: `rev_${id}`,
+          data: {
+            ...rest,
+            verifiedBuyer: false,
+            status: 'published',
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      }
     }
     await commitGatedOps(miscOps);
     console.log('[DELARICO] Live Firestore catalogue synchronized with real Kenyan materials & +254 706 824489.');
@@ -1286,33 +1327,80 @@ async function startServer() {
     }
   });
 
-  app.post('/api/customer/reviews', requireAuth, async (req: AuthedRequest, res: Response) => {
+  app.post('/api/customer/reviews', async (req: AuthedRequest, res: Response) => {
     try {
-      const session = req.session!;
+      const session = extractBearer(req);
+      const productId = String(req.body?.productId || '').trim().slice(0, 128);
+      const productName = String(req.body?.productName || 'Product').trim().slice(0, 160);
+      const customerName = String(req.body?.customerName || session?.displayName || '')
+        .trim()
+        .slice(0, 120);
+      const title = String(req.body?.title || '').trim().slice(0, 120);
+      const comment = String(req.body?.comment || '').trim().slice(0, 1500);
+      const rating = Math.min(5, Math.max(1, Math.round(Number(req.body?.rating || 5))));
+
+      if (!productId || !/^[a-zA-Z0-9_-]+$/.test(productId)) {
+        res.status(400).json({ error: 'Invalid product selected for review.' });
+        return;
+      }
+      if (customerName.length < 2) {
+        res.status(400).json({ error: 'Please enter your name (at least 2 characters).' });
+        return;
+      }
+      if (title.length < 2 || comment.length < 5) {
+        res.status(400).json({ error: 'Please enter a review headline and feedback (at least 5 characters).' });
+        return;
+      }
+
       const revRef = doc(collection(db, 'reviews'));
       const now = serverTimestamp();
-      const rating = Math.min(5, Math.max(1, Number(req.body?.rating || 5)));
+      const customerId = session ? session.uid : `cust_guest_${crypto.randomBytes(6).toString('hex')}`;
 
-      await commitGatedOps([
+      const ops: GatedWriteOp[] = [
         {
           type: 'set',
           ref: revRef,
           gateKey: `rev_${revRef.id}`,
           data: {
-            productId: String(req.body?.productId || '').slice(0, 128),
-            productName: String(req.body?.productName || 'Product').trim().slice(0, 160),
-            customerId: session.uid,
-            customerName: String(req.body?.customerName || session.displayName || 'Customer').trim().slice(0, 120),
+            productId,
+            productName: productName.length >= 2 ? productName : 'Construction Material',
+            customerId,
+            customerName,
             rating,
-            title: String(req.body?.title || '').trim().slice(0, 120),
-            comment: String(req.body?.comment || '').trim().slice(0, 1500),
+            title,
+            comment,
             verifiedBuyer: false,
             status: 'published',
             createdAt: now,
             updatedAt: now,
           },
         },
+      ];
+
+      // Recalculate product ratingAvg and reviewCount in Firestore
+      const prodRef = doc(db, 'products', productId);
+      const [prodSnap, existingRevSnap] = await Promise.all([
+        getDoc(prodRef),
+        getDocs(query(collection(db, 'reviews'), where('productId', '==', productId), where('status', '==', 'published'))),
       ]);
+      if (prodSnap.exists()) {
+        const ratings = existingRevSnap.docs.map((d) => Number(d.data()?.rating || 5));
+        ratings.push(rating);
+        const totalReviews = ratings.length;
+        const avgRating = Number((ratings.reduce((a, b) => a + b, 0) / totalReviews).toFixed(1));
+        ops.push({
+          type: 'update',
+          ref: prodRef,
+          gateKey: `prod_${productId}`,
+          data: {
+            ratingAvg: avgRating,
+            reviewCount: totalReviews,
+            updatedAt: now,
+          },
+        });
+      }
+
+      await commitGatedOps(ops);
       res.json({ ok: true, id: revRef.id });
     } catch (err) {
       console.error('Create review error:', err);
@@ -2155,6 +2243,15 @@ async function startServer() {
     }
   });
 
+  // Cache optimized local product photos & brand assets for fast page transitions
+  app.use(
+    '/assets',
+    express.static(path.join(process.cwd(), 'public', 'assets'), {
+      maxAge: '7d',
+      etag: true,
+    })
+  );
+
   // Vite middleware for development; static dist serving in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -2164,7 +2261,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, { maxAge: '1d' }));
     app.get('*all', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

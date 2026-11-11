@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Package } from 'lucide-react';
 
 interface ResilientImageProps {
@@ -6,6 +6,7 @@ interface ResilientImageProps {
   alt: string;
   className?: string;
   fallbackLabel?: string;
+  eager?: boolean;
 }
 
 export const ResilientImage: React.FC<ResilientImageProps> = ({
@@ -13,8 +14,13 @@ export const ResilientImage: React.FC<ResilientImageProps> = ({
   alt,
   className = '',
   fallbackLabel,
+  eager = false,
 }) => {
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
 
   if (!src || failed) {
     return (
@@ -35,6 +41,8 @@ export const ResilientImage: React.FC<ResilientImageProps> = ({
     <img
       src={src}
       alt={alt}
+      loading={eager ? 'eager' : 'lazy'}
+      decoding="async"
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
       className={className}

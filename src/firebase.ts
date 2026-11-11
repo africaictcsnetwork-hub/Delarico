@@ -8,6 +8,7 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
 export const OFFICIAL_LOGO_PATH = '/assets/aistudio/a543391c-e77b-4085-993e-839f88bd90dd_bd2a5d09.png';
+export const NAV_LOGO_PATH = '/assets/aistudio/delarico-logo-nav.png';
 
 export enum OperationType {
   CREATE = 'create',

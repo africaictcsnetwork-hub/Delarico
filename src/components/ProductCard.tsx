@@ -1,6 +1,6 @@
-import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeftRight, Heart, MessageCircle, ShoppingBag, Star, Zap } from 'lucide-react';
+import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowLeftRight, Check, Heart, MessageCircle, Minus, Plus, ShoppingBag, Star } from 'lucide-react';
 import { Product } from '../types';
 import { useStore } from '../context/StoreContext';
 import { buildProductEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
@@ -8,10 +8,12 @@ import { ResilientImage } from './ResilientImage';
 
 interface ProductCardProps {
   product: Product;
+  eager?: boolean;
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
-  const navigate = useNavigate();
+export const ProductCard: React.FC<ProductCardProps> = ({ product, eager = false }) => {
+  const [quantity, setQuantity] = useState(1);
+  const [justAdded, setJustAdded] = useState(false);
   const {
     addToCart,
     compareIds,
@@ -19,26 +21,36 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     favouriteIds,
     toggleFavourite,
     getEffectiveUnitPrice,
+    reviews,
     settings,
   } = useStore();
 
   const isCompared = compareIds.includes(product.id);
   const isFav = favouriteIds.includes(product.id);
-  const displayPrice = getEffectiveUnitPrice(product, 1);
+  const displayPrice = getEffectiveUnitPrice(product, quantity);
+
+  const liveReviews = reviews.filter((r) => r.productId === product.id);
+  const displayRatingAvg =
+    liveReviews.length > 0
+      ? Number((liveReviews.reduce((s, r) => s + r.rating, 0) / liveReviews.length).toFixed(1))
+      : product.ratingAvg || 4.8;
+  const displayReviewCount =
+    liveReviews.length > 0 ? liveReviews.length : product.reviewCount || 12;
   const savingsPct =
     product.compareAtPriceKes > displayPrice
       ? Math.round(((product.compareAtPriceKes - displayPrice) / product.compareAtPriceKes) * 100)
       : 0;
 
   const waUrl = buildWhatsAppUrl(
-    buildProductEnquiryMessage(product, 1, displayPrice),
+    buildProductEnquiryMessage(product, quantity, displayPrice),
     settings.whatsappNumber
   );
 
-  const handleBuyNow = () => {
+  const handleAddToCart = () => {
     if (product.stockQty <= 0) return;
-    addToCart(product, 1);
-    navigate('/checkout');
+    addToCart(product, quantity);
+    setJustAdded(true);
+    setTimeout(() => setJustAdded(false), 1800);
   };
 
   return (
@@ -50,6 +62,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             src={product.images[0]}
             alt={product.name}
             fallbackLabel={product.name}
+            eager={eager}
             className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
           />
         </Link>
@@ -113,11 +126,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           <div className="flex items-center text-amber-500">
             <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
             <span className="ml-1 text-xs font-semibold text-slate-800 tabular-nums">
-              {(product.ratingAvg || 4.8).toFixed(1)}
+              {displayRatingAvg.toFixed(1)}
             </span>
           </div>
           <span className="text-xs text-slate-400 tabular-nums">
-            ({product.reviewCount || 12})
+            ({displayReviewCount})
           </span>
         </div>
 
@@ -125,7 +138,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           {product.brand} · {product.unit}
         </p>
 
-        {/* Pricing & Direct Buy Controls */}
+        {/* Pricing & Direct Add to Cart Controls */}
         <div className="mt-auto pt-2.5 border-t border-slate-100">
           <div className="flex items-baseline justify-between gap-2 mb-0.5">
             <div className="flex items-baseline gap-2">
@@ -140,29 +153,72 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             </div>
           </div>
 
-          <p className="text-xs text-emerald-700 font-medium tabular-nums mb-3">
+          <p className="text-xs text-emerald-700 font-medium tabular-nums mb-2.5">
             Bulk ({product.minWholesaleQty}+): {formatKes(product.wholesalePriceKes)} / {product.unit}
           </p>
 
-          <div className="grid grid-cols-12 gap-1.5">
+          {/* Jumia Quantity Selector */}
+          <div className="flex items-center justify-between gap-2 mb-2 bg-slate-50 border border-slate-200 rounded-lg p-1">
+            <span className="text-[11px] font-semibold text-slate-600 pl-1">Qty:</span>
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                disabled={quantity <= 1 || product.stockQty <= 0}
+                aria-label={`Decrease quantity for ${product.name}`}
+                className="w-7 h-6 flex items-center justify-center text-slate-600 hover:text-navy-900 hover:bg-slate-200 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={Math.max(1, product.stockQty)}
+                value={quantity}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (!isNaN(val)) {
+                    setQuantity(Math.max(1, Math.min(product.stockQty, val)));
+                  }
+                }}
+                aria-label="Quantity"
+                className="w-10 text-center text-xs font-bold text-navy-900 bg-white border border-slate-200 rounded mx-1 py-0.5 focus:outline-none focus:border-royal-600"
+              />
+              <button
+                type="button"
+                onClick={() => setQuantity((q) => Math.min(product.stockQty, q + 1))}
+                disabled={quantity >= product.stockQty || product.stockQty <= 0}
+                aria-label={`Increase quantity for ${product.name}`}
+                className="w-7 h-6 flex items-center justify-center text-slate-600 hover:text-navy-900 hover:bg-slate-200 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+
+          {/* Jumia Single Add to Cart Button */}
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={handleBuyNow}
+              onClick={handleAddToCart}
               disabled={product.stockQty <= 0}
-              className="col-span-6 inline-flex items-center justify-center gap-1 px-2.5 py-2 text-xs font-semibold text-navy-950 bg-gold-500 rounded-lg hover:bg-gold-400 disabled:bg-slate-200 disabled:text-slate-400 transition-colors whitespace-nowrap"
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shadow-xs uppercase tracking-wide ${
+                justAdded
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-gold-500 hover:bg-gold-400 text-navy-950 disabled:bg-slate-200 disabled:text-slate-400'
+              }`}
             >
-              <Zap className="w-3.5 h-3.5 shrink-0" />
-              <span>Buy Now</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => addToCart(product, 1)}
-              disabled={product.stockQty <= 0}
-              title="Add to Cart"
-              className="col-span-4 inline-flex items-center justify-center gap-1 px-2.5 py-2 text-xs font-semibold text-white bg-navy-900 rounded-lg hover:bg-navy-800 disabled:bg-slate-300 transition-colors whitespace-nowrap"
-            >
-              <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
-              <span>Cart</span>
+              {justAdded ? (
+                <>
+                  <Check className="w-3.5 h-3.5 shrink-0" />
+                  <span>Added ({quantity})</span>
+                </>
+              ) : (
+                <>
+                  <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+                  <span>{product.stockQty <= 0 ? 'Out of Stock' : 'Add to Cart'}</span>
+                </>
+              )}
             </button>
             <a
               href={waUrl}
@@ -170,7 +226,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
               rel="noopener noreferrer"
               aria-label={`Order ${product.name} on WhatsApp`}
               title="Order on WhatsApp"
-              className="col-span-2 inline-flex items-center justify-center py-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
+              className="inline-flex items-center justify-center p-2.5 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors shrink-0"
             >
               <MessageCircle className="w-4 h-4" />
             </a>

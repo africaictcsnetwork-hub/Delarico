@@ -22,6 +22,7 @@ import {
   INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
   INITIAL_PROMOTIONS,
+  INITIAL_REVIEWS,
 } from '../data/seedCatalog';
 
 export interface ToastNotice {
@@ -74,6 +75,9 @@ interface StoreContextValue {
   clearCompare: () => void;
   favouriteIds: string[];
   toggleFavourite: (productId: string) => Promise<void>;
+  clearSavedItems: () => Promise<void>;
+  isWishlistOpen: boolean;
+  setIsWishlistOpen: (open: boolean) => void;
   quoteDraft: QuoteDraftItem[];
   addToQuoteDraft: (product: Product, quantity?: number) => void;
   updateQuoteDraftQty: (productId: string, quantity: number) => void;
@@ -97,7 +101,8 @@ const AUTH_TOKEN_KEY = 'delarico_session_token_v2';
 const CART_STORAGE_KEY = 'delarico_cart_v1';
 const QUOTE_STORAGE_KEY = 'delarico_quote_v1';
 const COMPARE_STORAGE_KEY = 'delarico_compare_v1';
-const GUEST_FAV_KEY = 'delarico_guest_fav_v1';
+const WISHLIST_STORAGE_KEY = 'delarico_wishlist_v1';
+const LEGACY_GUEST_FAV_KEY = 'delarico_guest_fav_v1';
 const AFFILIATE_REF_KEY = 'delarico_affiliate_ref_v1';
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -118,7 +123,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [dbProducts, setDbProducts] = useState<Product[]>([]);
   const [dbPromotions, setDbPromotions] = useState<Promotion[]>([]);
   const [dbBranches, setDbBranches] = useState<Branch[]>([]);
-  const [reviews, setReviews] = useState<ProductReview[]>([]);
+  const [dbReviews, setDbReviews] = useState<ProductReview[]>([]);
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
   const [isCatalogSeeded, setIsCatalogSeeded] = useState(false);
 
@@ -142,10 +147,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
-  const [guestFavIds, setGuestFavIds] = useState<string[]>(() => {
+  const [isWishlistOpen, setIsWishlistOpen] = useState(false);
+
+  const [savedLocalIds, setSavedLocalIds] = useState<string[]>(() => {
     try {
-      const raw = localStorage.getItem(GUEST_FAV_KEY);
-      return raw ? JSON.parse(raw) : [];
+      const primary = localStorage.getItem(WISHLIST_STORAGE_KEY);
+      if (primary) return JSON.parse(primary);
+      const legacy = localStorage.getItem(LEGACY_GUEST_FAV_KEY);
+      return legacy ? JSON.parse(legacy) : [];
     } catch {
       return [];
     }
@@ -313,7 +322,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       revQuery,
       (snap) => {
         const items = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ProductReview, 'id'>) }));
-        setReviews(items);
+        setDbReviews(items);
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'reviews')
     );
@@ -356,6 +365,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [dbBranches]
   );
 
+  const reviews: ProductReview[] = useMemo(() => {
+    if (dbReviews.length > 0) return dbReviews;
+    return INITIAL_REVIEWS.map((r) => ({
+      ...r,
+      verifiedBuyer: false,
+      status: 'published' as const,
+    }));
+  }, [dbReviews]);
+
   // Persist local storage states
   useEffect(() => {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartSnapshotIds));
@@ -370,8 +388,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [compareIds]);
 
   useEffect(() => {
-    localStorage.setItem(GUEST_FAV_KEY, JSON.stringify(guestFavIds));
-  }, [guestFavIds]);
+    try {
+      localStorage.setItem(WISHLIST_STORAGE_KEY, JSON.stringify(savedLocalIds));
+      localStorage.setItem(LEGACY_GUEST_FAV_KEY, JSON.stringify(savedLocalIds));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [savedLocalIds]);
 
   const captureAffiliateRef = useCallback((rawCode: string) => {
     const clean = rawCode.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
@@ -527,7 +550,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const clearCompare = () => setCompareIds([]);
 
-  const favouriteIds = userProfile ? userProfile.favouriteProductIds || [] : guestFavIds;
+  const favouriteIds = useMemo(() => {
+    if (!userProfile) return savedLocalIds;
+    const merged = Array.from(new Set([...savedLocalIds, ...(userProfile.favouriteProductIds || [])]));
+    return merged.slice(0, 50);
+  }, [userProfile, savedLocalIds]);
 
   const toggleFavourite = async (productId: string) => {
     const existsInFav = favouriteIds.includes(productId);
@@ -535,22 +562,40 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ? favouriteIds.filter((id) => id !== productId)
       : [...favouriteIds, productId].slice(0, 50);
 
+    // Always persist in localStorage for instant access across sessions
+    setSavedLocalIds(nextIds);
+
     if (!user || !userProfile) {
-      setGuestFavIds(nextIds);
-      notify(existsInFav ? 'Removed from saved items.' : 'Saved to favourites.', 'info');
+      notify(existsInFav ? 'Removed from Saved Items.' : 'Saved to your Wishlist!', 'info');
       return;
     }
 
+    setUserProfile((prev) => (prev ? { ...prev, favouriteProductIds: nextIds } : prev));
     try {
       await apiFetch('/api/customer/favourites', {
         method: 'PUT',
         body: JSON.stringify({ favouriteProductIds: nextIds }),
       });
-      setUserProfile((prev) => (prev ? { ...prev, favouriteProductIds: nextIds } : prev));
-      notify(existsInFav ? 'Removed from saved items.' : 'Saved to your account favourites.', 'success');
+      notify(existsInFav ? 'Removed from Saved Items.' : 'Saved to your Wishlist!', 'success');
     } catch (err) {
-      notify(err instanceof Error ? err.message : 'Could not update favourites.', 'error');
+      notify(err instanceof Error ? err.message : 'Saved locally; account sync pending.', 'info');
     }
+  };
+
+  const clearSavedItems = async () => {
+    setSavedLocalIds([]);
+    if (user && userProfile) {
+      setUserProfile((prev) => (prev ? { ...prev, favouriteProductIds: [] } : prev));
+      try {
+        await apiFetch('/api/customer/favourites', {
+          method: 'PUT',
+          body: JSON.stringify({ favouriteProductIds: [] }),
+        });
+      } catch {
+        // local list cleared already
+      }
+    }
+    notify('Saved items list cleared.', 'info');
   };
 
   const addToQuoteDraft = (product: Product, quantity = 10) => {
@@ -692,6 +737,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         clearCompare,
         favouriteIds,
         toggleFavourite,
+        clearSavedItems,
+        isWishlistOpen,
+        setIsWishlistOpen,
         quoteDraft,
         addToQuoteDraft,
         updateQuoteDraftQty,
