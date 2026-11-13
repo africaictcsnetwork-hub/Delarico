@@ -2,16 +2,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertCircle,
-  Bot,
   MessageCircle,
   Send,
   ShoppingBag,
-  Sparkles,
   Trash2,
+  UserRound,
   X,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { buildWhatsAppUrl } from '../utils/whatsapp';
+import { apiUrl } from '../utils/api';
 
 interface ChatMessage {
   id: string;
@@ -78,7 +78,7 @@ export const CustomerSupportChat: React.FC = () => {
           text: m.text,
         }));
 
-      const res = await fetch('/api/ai/chat', {
+      const res = await fetch(apiUrl('/api/ai/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -87,14 +87,19 @@ export const CustomerSupportChat: React.FC = () => {
         }),
       });
 
-      const data = (await res.json().catch(() => ({}))) as {
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const data = (isJson ? await res.json().catch(() => ({})) : {}) as {
         reply?: string;
         error?: string;
       };
 
-      if (!res.ok || !data.reply) {
+      if (!res.ok || !isJson || !data.reply) {
         throw new Error(
-          data.error || 'Customer Care AI could not respond right now. Please try again.'
+          data.error ||
+            (!isJson || res.status === 404
+              ? 'Live chat desk is offline right now. Reach us directly on WhatsApp below.'
+              : 'Delarico Customer Care could not respond right now. Please try again.')
         );
       }
 
@@ -110,7 +115,7 @@ export const CustomerSupportChat: React.FC = () => {
       const errorMessage =
         err instanceof Error
           ? err.message
-          : 'Unable to reach AI Customer Care. Please contact us on WhatsApp.';
+          : 'Unable to reach Delarico Customer Care. Please contact us on WhatsApp.';
       setMessages((prev) => [
         ...prev,
         {
@@ -136,14 +141,14 @@ export const CustomerSupportChat: React.FC = () => {
       {isOpen && (
         <div
           role="dialog"
-          aria-label="DELARICO AI Customer Care Chat"
+          aria-label="Delarico Customer Care"
           className="w-[calc(100vw-2rem)] sm:w-96 max-h-[76vh] bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
         >
           {/* Header */}
           <div className="bg-navy-900 text-white px-4 py-3 flex items-center justify-between border-b border-gold-500/30">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 rounded-full bg-gold-500 text-navy-950 flex items-center justify-center shrink-0 relative">
-                <Bot className="w-4 h-4" />
+                <UserRound className="w-4 h-4" />
                 <span
                   aria-hidden="true"
                   className="w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-navy-900 absolute -bottom-0.5 -right-0.5"
@@ -154,7 +159,7 @@ export const CustomerSupportChat: React.FC = () => {
                   Delarico Customer Care
                 </div>
                 <div className="text-[11px] text-emerald-300 font-medium flex items-center gap-1">
-                  <span>Online · Instant Platform Support</span>
+                  <span>Online · Ready to Assist You</span>
                 </div>
               </div>
             </div>
@@ -322,7 +327,7 @@ export const CustomerSupportChat: React.FC = () => {
         </div>
       )}
 
-      {/* Unified Bottom-Right Launcher Pill (Customer Care AI + Quick WhatsApp link inside) */}
+      {/* Unified Bottom-Right Launcher Pill (Delarico Customer Care + Quick WhatsApp link) */}
       <div className="flex items-center gap-2">
         <a
           href={directWaUrl}
@@ -338,15 +343,15 @@ export const CustomerSupportChat: React.FC = () => {
         <button
           type="button"
           onClick={() => setIsOpen((v) => !v)}
-          aria-label="Open Delarico AI Customer Care Chat"
+          aria-label="Open Delarico Customer Care"
           className="inline-flex items-center gap-2 px-4 py-2.5 bg-navy-900 text-white text-xs font-semibold rounded-full shadow-lg border border-gold-500/50 hover:bg-navy-800 transition-transform duration-150 hover:-translate-y-0.5"
         >
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
           </span>
-          <Sparkles className="w-3.5 h-3.5 text-gold-400" />
-          <span>{isOpen ? 'Close Care' : 'Customer Care AI'}</span>
+          <UserRound className="w-4 h-4 text-gold-400" />
+          <span>{isOpen ? 'Close Care' : 'Delarico Customer Care'}</span>
         </button>
       </div>
     </div>

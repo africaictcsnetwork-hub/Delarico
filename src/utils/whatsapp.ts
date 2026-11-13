@@ -6,6 +6,12 @@ export function normalizeKenyanPhone(raw: string): string {
   const trimmed = raw.trim();
   const digits = trimmed.replace(/[^0-9]/g, '');
   if (!digits) return '';
+  if (digits.startsWith('00254') && digits.length === 14) {
+    return `+${digits.slice(2)}`;
+  }
+  if (digits.startsWith('2540') && digits.length === 13) {
+    return `+254${digits.slice(4)}`;
+  }
   if (digits.startsWith('254') && digits.length === 12) {
     return `+${digits}`;
   }

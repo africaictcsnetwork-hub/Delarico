@@ -18,6 +18,7 @@ import { OFFICIAL_LOGO_PATH } from '../firebase';
 import { useStore } from '../context/StoreContext';
 import { EnquiryType } from '../types';
 import { buildWhatsAppUrl } from '../utils/whatsapp';
+import { apiUrl } from '../utils/api';
 
 export const AboutPage: React.FC = () => {
   const { settings, branches } = useStore();
@@ -288,7 +289,7 @@ const EnquiryFormBlock: React.FC<EnquiryFormBlockProps> = ({ defaultType, headin
       if (authToken) {
         headers.Authorization = `Bearer ${authToken}`;
       }
-      const res = await fetch('/api/customer/enquiries', {
+      const res = await fetch(apiUrl('/api/customer/enquiries'), {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -301,8 +302,9 @@ const EnquiryFormBlock: React.FC<EnquiryFormBlockProps> = ({ defaultType, headin
           message: message.trim(),
         }),
       });
-      if (!res.ok) {
-        throw new Error('Could not send message right now.');
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        throw new Error('Could not send message right now. Please reach us directly on WhatsApp.');
       }
       setSubmitted(true);
       setSubject('');

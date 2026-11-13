@@ -25,6 +25,7 @@ import {
   INITIAL_REVIEWS,
 } from '../data/seedCatalog';
 import { createProductGallery } from '../utils/productVisuals';
+import { apiUrl } from '../utils/api';
 
 function sanitizeProductRecord(item: Product): Product {
   const realImages = Array.isArray(item.images)
@@ -264,10 +265,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (activeToken) {
         headers.set('Authorization', `Bearer ${activeToken}`);
       }
-      const res = await fetch(path, { ...init, headers });
-      const data = await res.json().catch(() => ({}));
+      const res = await fetch(apiUrl(path), { ...init, headers });
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const data = isJson ? await res.json().catch(() => ({})) : {};
       if (!res.ok) {
-        throw new Error((data as { error?: string })?.error || `Request failed (${res.status})`);
+        throw new Error(
+          (data as { error?: string })?.error ||
+            (isJson ? `Request failed (${res.status})` : `Server endpoint unavailable (${res.status})`)
+        );
+      }
+      if (!isJson) {
+        throw new Error('Unexpected non-JSON response from backend service.');
       }
       return data as T;
     },
@@ -471,7 +480,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch {
       // ignore
     }
-    void fetch('/api/affiliates/track-click', {
+    void fetch(apiUrl('/api/affiliates/track-click'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: affiliateRef }),
@@ -680,26 +689,42 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const loginWithPhone = async (phone: string, password: string): Promise<AuthSessionUser | null> => {
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, password }),
       });
-      const data = await res.json().catch(() => ({}));
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const data = isJson ? await res.json().catch(() => ({})) : {};
       if (!res.ok) {
-        notify((data as { error?: string })?.error || 'Invalid phone number or password.', 'error');
+        const msg =
+          (data as { error?: string })?.error ||
+          (res.status === 404 || res.status >= 502 || !isJson
+            ? 'Authentication server is unreachable. Please retry in a moment.'
+            : 'Invalid phone number or password.');
+        notify(msg, 'error');
         return null;
       }
       const typed = data as {
-        token: string;
-        user: AuthSessionUser;
-        profile: UserPublicProfile;
-        contact: UserPrivateContact;
-        addresses: DeliveryAddress[];
+        token?: string;
+        user?: AuthSessionUser;
+        profile?: UserPublicProfile;
+        contact?: UserPrivateContact;
+        addresses?: DeliveryAddress[];
       };
+      if (!isJson || !typed.token || !typed.user || !typed.profile || !typed.contact) {
+        notify('Authentication service returned an invalid response. Please try again.', 'error');
+        return null;
+      }
       localStorage.setItem(AUTH_TOKEN_KEY, typed.token);
       setAuthToken(typed.token);
-      applyBundle(typed);
+      applyBundle({
+        user: typed.user,
+        profile: typed.profile,
+        contact: typed.contact,
+        addresses: typed.addresses || [],
+      });
       setAuthReady(true);
       notify(`Welcome back, ${typed.user.displayName}!`, 'success');
       return typed.user;
@@ -711,26 +736,42 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const registerWithPhone = async (params: RegisterPhoneParams): Promise<AuthSessionUser | null> => {
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
-      const data = await res.json().catch(() => ({}));
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const data = isJson ? await res.json().catch(() => ({})) : {};
       if (!res.ok) {
-        notify((data as { error?: string })?.error || 'Could not create account.', 'error');
+        const msg =
+          (data as { error?: string })?.error ||
+          (res.status === 404 || res.status >= 502 || !isJson
+            ? 'Registration server is unreachable. Please retry in a moment.'
+            : 'Could not create account.');
+        notify(msg, 'error');
         return null;
       }
       const typed = data as {
-        token: string;
-        user: AuthSessionUser;
-        profile: UserPublicProfile;
-        contact: UserPrivateContact;
-        addresses: DeliveryAddress[];
+        token?: string;
+        user?: AuthSessionUser;
+        profile?: UserPublicProfile;
+        contact?: UserPrivateContact;
+        addresses?: DeliveryAddress[];
       };
+      if (!isJson || !typed.token || !typed.user || !typed.profile || !typed.contact) {
+        notify('Registration service returned an invalid response. Please try again.', 'error');
+        return null;
+      }
       localStorage.setItem(AUTH_TOKEN_KEY, typed.token);
       setAuthToken(typed.token);
-      applyBundle(typed);
+      applyBundle({
+        user: typed.user,
+        profile: typed.profile,
+        contact: typed.contact,
+        addresses: typed.addresses || [],
+      });
       setAuthReady(true);
       notify(`Account created! Welcome, ${typed.user.displayName}.`, 'success');
       return typed.user;

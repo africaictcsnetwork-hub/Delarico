@@ -171,7 +171,7 @@ export const AffiliatePage: React.FC = () => {
     }
   };
 
-  const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://www.delarico.co.ke';
+  const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://delarico.co.ke';
   const storeReferralUrl = affiliate ? `${originUrl}/?ref=${affiliate.affiliateCode}` : `${originUrl}/`;
 
   const copyText = async (text: string, key: string, label: string) => {

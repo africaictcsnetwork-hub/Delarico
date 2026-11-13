@@ -23,6 +23,7 @@ import {
 import { NAV_LOGO_PATH } from '../firebase';
 import { useStore } from '../context/StoreContext';
 import { buildCartEnquiryMessage, buildWhatsAppUrl, formatKes } from '../utils/whatsapp';
+import { apiUrl } from '../utils/api';
 import { CustomerSupportChat } from './CustomerSupportChat';
 import { QuickSearchBar } from './QuickSearchBar';
 import { ResilientImage } from './ResilientImage';
@@ -91,14 +92,20 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     setNlSubmitting(true);
     setNlStatusMsg(null);
     try {
-      const res = await fetch('/api/newsletter/subscribe', {
+      const res = await fetch(apiUrl('/api/newsletter/subscribe'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: cleanEmail, privacyConsent: true, source: 'footer' }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msg = (data as { error?: string })?.error || 'Could not complete subscription.';
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const data = isJson ? await res.json().catch(() => ({})) : {};
+      if (!res.ok || !isJson) {
+        const msg =
+          (data as { error?: string })?.error ||
+          (!isJson || res.status === 404
+            ? 'Subscription service is unavailable right now. Message us on WhatsApp to join alerts.'
+            : 'Could not complete subscription.');
         setNlStatusMsg({ type: 'error', text: msg });
         notify(msg, 'error');
         return;
