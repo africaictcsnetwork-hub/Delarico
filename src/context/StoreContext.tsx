@@ -408,6 +408,52 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
+  // Fast REST catalog hydration fallback if Firestore live stream is slow or blocked
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(apiUrl('/api/catalog'), { signal: controller.signal });
+        if (!res.ok) return;
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) return;
+        const data = (await res.json()) as {
+          categories?: Category[];
+          products?: Product[];
+          promotions?: Promotion[];
+          branches?: Branch[];
+          reviews?: ProductReview[];
+          settings?: StoreSettings;
+        };
+        if (controller.signal.aborted) return;
+        if (Array.isArray(data.categories) && data.categories.length > 0) {
+          setDbCategories((prev) =>
+            prev.length > 0 ? prev : [...data.categories!].sort((a, b) => a.sortOrder - b.sortOrder)
+          );
+          setIsCatalogSeeded(true);
+        }
+        if (Array.isArray(data.products) && data.products.length > 0) {
+          setDbProducts((prev) => (prev.length > 0 ? prev : data.products!.map(sanitizeProductRecord)));
+        }
+        if (Array.isArray(data.promotions) && data.promotions.length > 0) {
+          setDbPromotions((prev) => (prev.length > 0 ? prev : data.promotions!));
+        }
+        if (Array.isArray(data.branches) && data.branches.length > 0) {
+          setDbBranches((prev) => (prev.length > 0 ? prev : data.branches!));
+        }
+        if (Array.isArray(data.reviews) && data.reviews.length > 0) {
+          setDbReviews((prev) => (prev.length > 0 ? prev : data.reviews!));
+        }
+        if (data.settings && data.settings.businessName) {
+          setSettings((prev) => (prev === DEFAULT_STORE_SETTINGS ? data.settings! : prev));
+        }
+      } catch {
+        // Ignore abort / offline errors; seed & Firestore listeners remain active
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+
   const categories = useMemo(
     () => (dbCategories.length > 0 ? dbCategories : INITIAL_CATEGORIES),
     [dbCategories]
@@ -782,6 +828,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const logout = async () => {
+    try {
+      await fetch(apiUrl('/api/auth/logout'), { method: 'POST' });
+    } catch {
+      // ignore network failures on stateless sign-out
+    }
     localStorage.removeItem(AUTH_TOKEN_KEY);
     setAuthToken(null);
     setUser(null);

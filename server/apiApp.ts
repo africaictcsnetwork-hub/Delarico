@@ -271,6 +271,38 @@ function makeAccountIdFromPhone(normalizedPhone: string): string {
   return `acct_${normalizedPhone.replace(/[^0-9]/g, '')}`;
 }
 
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+
+function createRateLimiter(windowMs: number, maxRequests: number, label: string) {
+  const buckets = new Map<string, RateLimitBucket>();
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const ip = forwarded || req.ip || 'unknown';
+    const key = `${label}:${ip}`;
+    const now = Date.now();
+    const existing = buckets.get(key);
+    if (!existing || existing.resetAt <= now) {
+      if (buckets.size > 5000) buckets.clear();
+      buckets.set(key, { count: 1, resetAt: now + windowMs });
+      next();
+      return;
+    }
+    if (existing.count >= maxRequests) {
+      const retryAfterSec = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSec));
+      res.status(429).json({
+        error: `Too many requests. Please wait ${retryAfterSec} seconds and try again.`,
+      });
+      return;
+    }
+    existing.count += 1;
+    next();
+  };
+}
+
 async function loadUserBundle(session: SessionTokenPayload) {
   const usersList = await queryVaultDocs<Record<string, unknown>>(
     collection(db, 'users'),
@@ -525,6 +557,23 @@ export function createApiApp(): Express {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '2mb' }));
 
+  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'type' in err &&
+      (err as { type?: string }).type === 'entity.parse.failed'
+    ) {
+      res.status(400).json({ error: 'Invalid JSON request payload.' });
+      return;
+    }
+    next(err);
+  });
+
+  const authRateLimit = createRateLimiter(10 * 60 * 1000, 30, 'auth');
+  const aiRateLimit = createRateLimiter(5 * 60 * 1000, 35, 'ai');
+  const publicWriteRateLimit = createRateLimiter(10 * 60 * 1000, 25, 'pubwrite');
+
   const defaultAllowedOrigins = [
     'https://delarico.co.ke',
     'https://www.delarico.co.ke',
@@ -533,6 +582,14 @@ export function createApiApp(): Express {
   ];
   if (process.env.APP_URL) {
     defaultAllowedOrigins.push(process.env.APP_URL.trim().replace(/\/+$/, ''));
+  }
+  if (process.env.VERCEL_URL) {
+    defaultAllowedOrigins.push(`https://${process.env.VERCEL_URL.trim().replace(/^https?:\/\//, '')}`);
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    defaultAllowedOrigins.push(
+      `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim().replace(/^https?:\/\//, '')}`
+    );
   }
   if (process.env.ALLOWED_ORIGINS) {
     process.env.ALLOWED_ORIGINS.split(',').forEach((o) => {
@@ -559,7 +616,11 @@ export function createApiApp(): Express {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     if (req.path.startsWith('/api')) {
       res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-      res.setHeader('Cache-Control', 'no-store');
+      if (req.method !== 'GET' || !req.path.startsWith('/api/catalog')) {
+        res.setHeader('Cache-Control', 'no-store');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
+      }
     }
     next();
   });
@@ -577,6 +638,111 @@ export function createApiApp(): Express {
     next();
   });
 
+  interface PublicCatalogBundle {
+    categories: Array<Record<string, unknown>>;
+    products: Array<Record<string, unknown>>;
+    promotions: Array<Record<string, unknown>>;
+    branches: Array<Record<string, unknown>>;
+    reviews: Array<Record<string, unknown>>;
+    settings: Record<string, unknown>;
+    source: 'firestore' | 'seed';
+    updatedAt: string;
+  }
+
+  let cachedPublicCatalog: PublicCatalogBundle | null = null;
+  let cachedPublicCatalogAt = 0;
+
+  function invalidateCatalogCaches() {
+    cachedPublicCatalog = null;
+    cachedPublicCatalogAt = 0;
+    cachedCatalogSummary = '';
+    cachedCatalogSummaryAt = 0;
+  }
+
+  async function loadPublicCatalogBundle(): Promise<PublicCatalogBundle> {
+    if (cachedPublicCatalog && Date.now() - cachedPublicCatalogAt < 15_000) {
+      return cachedPublicCatalog;
+    }
+
+    let source: 'firestore' | 'seed' = 'seed';
+    let categories: Array<Record<string, unknown>> = INITIAL_CATEGORIES.map((c) => ({ ...c }));
+    let products: Array<Record<string, unknown>> = INITIAL_PRODUCTS.map((p) => ({ ...p }));
+    let promotions: Array<Record<string, unknown>> = INITIAL_PROMOTIONS.map((p) => ({ ...p }));
+    let branches: Array<Record<string, unknown>> = INITIAL_BRANCHES.map((b) => ({ ...b }));
+    let reviews: Array<Record<string, unknown>> = INITIAL_REVIEWS.map((r) => ({
+      ...r,
+      verifiedBuyer: false,
+      status: 'published',
+    }));
+    let settings: Record<string, unknown> = { ...DEFAULT_STORE_SETTINGS };
+
+    try {
+      const [catsSnap, prodsSnap, promosSnap, branchSnap, revsSnap, settingsSnap] = await Promise.race([
+        Promise.all([
+          getDocs(query(collection(db, 'categories'), where('isActive', '==', true))),
+          getDocs(query(collection(db, 'products'), where('isActive', '==', true))),
+          getDocs(query(collection(db, 'promotions'), where('isActive', '==', true))),
+          getDocs(query(collection(db, 'branches'), where('isActive', '==', true))),
+          getDocs(query(collection(db, 'reviews'), where('status', '==', 'published'))),
+          getDoc(doc(db, 'settings', 'corporate')),
+        ]),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Public catalog query timeout')), 3500)
+        ),
+      ]);
+
+      if (!catsSnap.empty) {
+        categories = catsSnap.docs
+          .map((d) => sanitizeClientDoc<Record<string, unknown>>(d.id, d.data()))
+          .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+        source = 'firestore';
+      }
+      if (!prodsSnap.empty) {
+        products = prodsSnap.docs.map((d) => {
+          const item = sanitizeClientDoc<Record<string, unknown>>(d.id, d.data());
+          if (!hasOnlyRealPhotos(item.images)) {
+            item.images = resolveRealGalleryForRecord(d.id, item);
+          }
+          return item;
+        });
+        source = 'firestore';
+      }
+      if (!promosSnap.empty) {
+        promotions = promosSnap.docs.map((d) => sanitizeClientDoc<Record<string, unknown>>(d.id, d.data()));
+        source = 'firestore';
+      }
+      if (!branchSnap.empty) {
+        branches = branchSnap.docs.map((d) => sanitizeClientDoc<Record<string, unknown>>(d.id, d.data()));
+        source = 'firestore';
+      }
+      if (!revsSnap.empty) {
+        reviews = revsSnap.docs.map((d) => sanitizeClientDoc<Record<string, unknown>>(d.id, d.data()));
+      }
+      if (settingsSnap.exists()) {
+        settings = sanitizeClientDoc<Record<string, unknown>>(
+          settingsSnap.id,
+          settingsSnap.data() as Record<string, unknown>
+        );
+        source = 'firestore';
+      }
+    } catch {
+      // Fallback gracefully to bundled catalog constants
+    }
+
+    cachedPublicCatalog = {
+      categories,
+      products,
+      promotions,
+      branches,
+      reviews,
+      settings,
+      source,
+      updatedAt: new Date().toISOString(),
+    };
+    cachedPublicCatalogAt = Date.now();
+    return cachedPublicCatalog;
+  }
+
   app.get('/api/health', async (_req: Request, res: Response) => {
     try {
       const settingsSnap = await getDoc(doc(db, 'settings', 'corporate'));
@@ -584,6 +750,7 @@ export function createApiApp(): Express {
         ok: true,
         status: 'healthy',
         timestamp: new Date().toISOString(),
+        uptimeSeconds: Math.round(process.uptime()),
         projectId: firebaseConfig.projectId,
         databaseId: firebaseConfig.firestoreDatabaseId,
         settingsPresent: settingsSnap.exists(),
@@ -599,9 +766,149 @@ export function createApiApp(): Express {
   });
 
   // =========================================================================
+  // Public Storefront REST Catalog & Pricing Endpoints
+  // =========================================================================
+  app.get('/api/catalog', async (_req: Request, res: Response) => {
+    try {
+      const catalog = await loadPublicCatalogBundle();
+      res.json(catalog);
+    } catch (err) {
+      console.error('Public catalog load error:', err);
+      res.status(500).json({ error: 'Unable to load product catalogue.' });
+    }
+  });
+
+  app.get('/api/categories', async (_req: Request, res: Response) => {
+    const catalog = await loadPublicCatalogBundle();
+    res.json({ categories: catalog.categories, source: catalog.source });
+  });
+
+  app.get('/api/products', async (req: Request, res: Response) => {
+    const catalog = await loadPublicCatalogBundle();
+    let list = [...catalog.products];
+
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const category = String(req.query.category || '').trim().toLowerCase();
+    const featured = String(req.query.featured || '').toLowerCase();
+    const bestSeller = String(req.query.bestSeller || '').toLowerCase();
+    const onPromotion = String(req.query.onPromotion || '').toLowerCase();
+    const inStock = String(req.query.inStock || '').toLowerCase();
+    const sort = String(req.query.sort || '').toLowerCase();
+    const limitRaw = Number(req.query.limit || 0);
+
+    if (category) {
+      const matchedCat = catalog.categories.find(
+        (c) =>
+          String(c.id).toLowerCase() === category || String(c.slug).toLowerCase() === category
+      );
+      const targetId = matchedCat ? String(matchedCat.id).toLowerCase() : category;
+      list = list.filter(
+        (p) =>
+          String(p.categoryId || '').toLowerCase() === targetId ||
+          String(p.categoryName || '').toLowerCase().includes(category)
+      );
+    }
+    if (q) {
+      list = list.filter((p) =>
+        `${String(p.name || '')} ${String(p.sku || '')} ${String(p.brand || '')} ${String(p.categoryName || '')} ${String(p.specSummary || '')}`
+          .toLowerCase()
+          .includes(q)
+      );
+    }
+    if (featured === 'true') list = list.filter((p) => Boolean(p.featured));
+    if (bestSeller === 'true') list = list.filter((p) => Boolean(p.bestSeller));
+    if (onPromotion === 'true') list = list.filter((p) => Boolean(p.onPromotion));
+    if (inStock === 'true') list = list.filter((p) => Number(p.stockQty || 0) > 0);
+
+    if (sort === 'price_asc') {
+      list.sort((a, b) => Number(a.priceKes || 0) - Number(b.priceKes || 0));
+    } else if (sort === 'price_desc') {
+      list.sort((a, b) => Number(b.priceKes || 0) - Number(a.priceKes || 0));
+    } else if (sort === 'rating') {
+      list.sort((a, b) => Number(b.ratingAvg || 0) - Number(a.ratingAvg || 0));
+    }
+
+    const total = list.length;
+    if (limitRaw > 0 && Number.isFinite(limitRaw)) {
+      list = list.slice(0, Math.min(200, Math.floor(limitRaw)));
+    }
+
+    res.json({ products: list, total, source: catalog.source });
+  });
+
+  app.get('/api/products/:slugOrId', async (req: Request, res: Response) => {
+    const key = String(req.params.slugOrId || '').trim().toLowerCase();
+    const catalog = await loadPublicCatalogBundle();
+    const product = catalog.products.find(
+      (p) => String(p.id || '').toLowerCase() === key || String(p.slug || '').toLowerCase() === key
+    );
+    if (!product) {
+      res.status(404).json({ error: 'Product not found.' });
+      return;
+    }
+    const reviews = catalog.reviews.filter((r) => String(r.productId) === String(product.id));
+    res.json({ product, reviews });
+  });
+
+  app.get('/api/promotions', async (_req: Request, res: Response) => {
+    const catalog = await loadPublicCatalogBundle();
+    res.json({ promotions: catalog.promotions, source: catalog.source });
+  });
+
+  app.post('/api/promotions/validate', async (req: Request, res: Response) => {
+    const code = String(req.body?.code || '').trim().toUpperCase();
+    const subtotalKes = Math.max(0, Number(req.body?.subtotalKes || 0));
+    if (!code) {
+      res.status(400).json({ valid: false, error: 'Please enter a promotional code.' });
+      return;
+    }
+    const catalog = await loadPublicCatalogBundle();
+    const promo = catalog.promotions.find(
+      (p) => Boolean(p.isActive) && String(p.code || '').toUpperCase() === code
+    );
+    if (!promo) {
+      res.status(404).json({ valid: false, error: 'Invalid or inactive promotional code.' });
+      return;
+    }
+    const minOrderKes = Number(promo.minOrderKes || 0);
+    if (subtotalKes < minOrderKes) {
+      res.status(400).json({
+        valid: false,
+        error: `Minimum order of KES ${minOrderKes.toLocaleString()} required for ${code}.`,
+      });
+      return;
+    }
+    const discountValue = Number(promo.discountValue || 0);
+    const discountKes =
+      promo.discountType === 'percentage'
+        ? Math.round((subtotalKes * discountValue) / 100)
+        : Math.min(subtotalKes, discountValue);
+    res.json({ valid: true, promotion: promo, discountKes });
+  });
+
+  app.get('/api/branches', async (_req: Request, res: Response) => {
+    const catalog = await loadPublicCatalogBundle();
+    res.json({ branches: catalog.branches, source: catalog.source });
+  });
+
+  app.get('/api/reviews', async (req: Request, res: Response) => {
+    const productId = String(req.query.productId || '').trim();
+    const catalog = await loadPublicCatalogBundle();
+    const list = productId
+      ? catalog.reviews.filter((r) => String(r.productId) === productId)
+      : catalog.reviews;
+    res.json({ reviews: list });
+  });
+
+  app.get('/api/settings', async (_req: Request, res: Response) => {
+    const catalog = await loadPublicCatalogBundle();
+    res.json({ settings: catalog.settings });
+  });
+
+  // =========================================================================
   // Unified Phone + Password Authentication (Stealth Admin Detection)
   // =========================================================================
-  app.post('/api/auth/login', async (req: Request, res: Response) => {
+  app.post('/api/auth/login', authRateLimit, async (req: Request, res: Response) => {
     try {
       const rawPhone = String(req.body?.phone || '');
       const password = String(req.body?.password || '');
@@ -727,7 +1034,7 @@ export function createApiApp(): Express {
     }
   });
 
-  app.post('/api/auth/register', async (req: Request, res: Response) => {
+  app.post('/api/auth/register', authRateLimit, async (req: Request, res: Response) => {
     try {
       const displayName = String(req.body?.displayName || '').trim().slice(0, 120);
       const rawPhone = String(req.body?.phone || '');
@@ -945,6 +1252,72 @@ export function createApiApp(): Express {
     }
   });
 
+  app.post('/api/auth/logout', (_req: Request, res: Response) => {
+    res.json({ ok: true });
+  });
+
+  app.patch('/api/auth/password', authRateLimit, requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const session = req.session!;
+      if (session.role === 'admin' || session.uid === 'usr_executive_01') {
+        res.status(400).json({ error: 'Operations access credentials cannot be changed from this form.' });
+        return;
+      }
+      const currentPassword = String(req.body?.currentPassword || '');
+      const newPassword = String(req.body?.newPassword || '');
+      if (!currentPassword || newPassword.length < 4) {
+        res.status(400).json({ error: 'Please provide your current password and a new password (at least 4 characters).' });
+        return;
+      }
+
+      const acctSnap = await getDocs(
+        query(
+          collection(db, 'authAccounts'),
+          where('vaultKey', '==', SERVER_VAULT_KEY),
+          where('uid', '==', session.uid)
+        )
+      );
+      if (acctSnap.empty) {
+        res.status(404).json({ error: 'Customer credentials record not found.' });
+        return;
+      }
+
+      const acctDoc = acctSnap.docs[0];
+      const acctData = acctDoc.data() as {
+        uid: string;
+        normalizedPhone: string;
+        passwordSalt: string;
+        passwordHash: string;
+      };
+      const curHash = crypto.scryptSync(currentPassword, acctData.passwordSalt, 64).toString('hex');
+      const hashBuf = Buffer.from(acctData.passwordHash, 'hex');
+      const candBuf = Buffer.from(curHash, 'hex');
+      if (hashBuf.length !== candBuf.length || !crypto.timingSafeEqual(hashBuf, candBuf)) {
+        res.status(401).json({ error: 'Current password is incorrect.' });
+        return;
+      }
+
+      const newSalt = crypto.randomBytes(16).toString('hex');
+      const newHash = crypto.scryptSync(newPassword, newSalt, 64).toString('hex');
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: doc(db, 'authAccounts', acctDoc.id),
+          gateKey: `auth_${acctDoc.id}`,
+          data: {
+            passwordSalt: newSalt,
+            passwordHash: newHash,
+            updatedAt: serverTimestamp(),
+          },
+        },
+      ]);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Password change error:', err);
+      res.status(500).json({ error: 'Unable to update password right now.' });
+    }
+  });
+
   // =========================================================================
   // Customer Portal Endpoints
   // =========================================================================
@@ -1108,13 +1481,130 @@ export function createApiApp(): Express {
     try {
       const uid = req.session!.uid;
       const itemsInput = Array.isArray(req.body?.items) ? req.body.items : [];
-      if (itemsInput.length === 0) {
-        res.status(400).json({ error: 'Order must contain at least one item.' });
+      if (itemsInput.length === 0 || itemsInput.length > 200) {
+        res.status(400).json({
+          error: itemsInput.length === 0
+            ? 'Order must contain at least one item.'
+            : 'Order cannot exceed 200 distinct line items.',
+        });
         return;
       }
 
+      const catalog = await loadPublicCatalogBundle();
+      const userBundle = await loadUserBundle(req.session!);
+      const wholesaleApproved = Boolean(userBundle.profile?.wholesaleApproved);
+
+      // Authoritatively resolve prices, stock, and totals on the server
+      const resolvedItems: Array<{
+        productId: string;
+        categoryId: string;
+        productName: string;
+        sku: string;
+        unit: string;
+        quantity: number;
+        unitPriceKes: number;
+        lineTotalKes: number;
+      }> = [];
+
+      for (const rawItem of itemsInput as Array<Record<string, unknown>>) {
+        const productId = String(rawItem?.productId || '').trim().slice(0, 128);
+        const qty = Math.max(1, Math.round(Number(rawItem?.quantity || 1)));
+        const catalogProduct =
+          catalog.products.find((p) => String(p.id) === productId) ||
+          INITIAL_PRODUCTS.find((p) => p.id === productId);
+
+        if (catalogProduct) {
+          const availableStock = Number(catalogProduct.stockQty ?? 0);
+          if (availableStock <= 0) {
+            res.status(400).json({
+              error: `${String(catalogProduct.name)} is currently out of stock. Request a quotation for restock lead time.`,
+            });
+            return;
+          }
+          if (qty > availableStock) {
+            res.status(400).json({
+              error: `Only ${availableStock} ${String(catalogProduct.unit || 'units')} of ${String(catalogProduct.name)} are available in stock.`,
+            });
+            return;
+          }
+          const minBulk = Math.max(1, Number(catalogProduct.minWholesaleQty || 1));
+          const isBulk = wholesaleApproved || qty >= minBulk;
+          const unitPriceKes = Math.max(
+            0,
+            Math.round(
+              Number(isBulk ? catalogProduct.wholesalePriceKes : catalogProduct.priceKes)
+            )
+          );
+          resolvedItems.push({
+            productId: String(catalogProduct.id || productId),
+            categoryId: String(catalogProduct.categoryId || 'cat-building-materials'),
+            productName: String(catalogProduct.name || 'Material').slice(0, 160),
+            sku: String(catalogProduct.sku || 'DLR-ITEM').slice(0, 64),
+            unit: String(catalogProduct.unit || 'Piece').slice(0, 40),
+            quantity: qty,
+            unitPriceKes,
+            lineTotalKes: unitPriceKes * qty,
+          });
+        } else if (productId && /^[a-zA-Z0-9_-]+$/.test(productId)) {
+          const fallbackUnit = Math.max(0, Number(rawItem?.unitPriceKes || 0));
+          resolvedItems.push({
+            productId,
+            categoryId: 'cat-building-materials',
+            productName: String(rawItem?.productName || 'Material').trim().slice(0, 160) || 'Material',
+            sku: String(rawItem?.sku || 'DLR-ITEM').trim().toUpperCase().slice(0, 64) || 'DLR-ITEM',
+            unit: String(rawItem?.unit || 'Piece').trim().slice(0, 40) || 'Piece',
+            quantity: qty,
+            unitPriceKes: fallbackUnit,
+            lineTotalKes: fallbackUnit * qty,
+          });
+        } else {
+          res.status(400).json({ error: 'One or more items in your cart are invalid.' });
+          return;
+        }
+      }
+
+      const subtotalKes = resolvedItems.reduce((sum, item) => sum + item.lineTotalKes, 0);
+      const requestedPromoCode = String(req.body?.promoCode || '').trim().toUpperCase().slice(0, 40);
+      let appliedPromoCode = '';
+      let discountKes = 0;
+
+      if (requestedPromoCode) {
+        const promo = catalog.promotions.find(
+          (p) => Boolean(p.isActive) && String(p.code || '').toUpperCase() === requestedPromoCode
+        );
+        if (promo && subtotalKes >= Number(promo.minOrderKes || 0)) {
+          appliedPromoCode = String(promo.code).toUpperCase().slice(0, 40);
+          const val = Number(promo.discountValue || 0);
+          discountKes =
+            promo.discountType === 'percentage'
+              ? Math.round((subtotalKes * val) / 100)
+              : Math.min(subtotalKes, val);
+        }
+      }
+
+      const deliveryMethodRaw = String(req.body?.deliveryMethod || 'local_siaya');
+      const deliveryMethod = ['pickup', 'local_siaya', 'regional_nyanza', 'countrywide_freight'].includes(
+        deliveryMethodRaw
+      )
+        ? deliveryMethodRaw
+        : 'local_siaya';
+
+      const netMaterialsKes = Math.max(0, subtotalKes - discountKes);
+      const freeThreshold = Number(catalog.settings.freeDeliveryThresholdKes ?? 80000);
+      const deliveryFeeKes =
+        deliveryMethod === 'pickup'
+          ? 0
+          : deliveryMethod === 'local_siaya'
+          ? netMaterialsKes >= freeThreshold
+            ? 0
+            : 1500
+          : deliveryMethod === 'regional_nyanza'
+          ? 4500
+          : 9500;
+      const totalKes = netMaterialsKes + deliveryFeeKes;
+
       const orderRef = doc(collection(db, 'orders'));
-      const orderNumber = `DLR-${Date.now().toString().slice(-6)}`;
+      const orderNumber = `DLR-${Date.now().toString().slice(-6)}${crypto.randomBytes(1).toString('hex').toUpperCase()}`;
       const now = serverTimestamp();
 
       const rawAffiliateCode = String(req.body?.affiliateCode || '')
@@ -1123,28 +1613,44 @@ export function createApiApp(): Express {
         .replace(/[^A-Z0-9-]/g, '')
         .slice(0, 24);
 
+      const safeCustomerName = (
+        String(req.body?.customerName || req.session!.displayName || 'Customer').trim() || 'Customer'
+      ).slice(0, 120);
+      const safeCustomerPhone = (
+        String(req.body?.customerPhone || req.session!.phone || '+254700000000').trim() || '+254700000000'
+      ).slice(0, 30);
+      const safeCustomerEmail = (
+        String(req.body?.customerEmail || req.session!.email || 'customer@delarico.co.ke').trim() ||
+        'customer@delarico.co.ke'
+      ).slice(0, 254);
+      const safeCounty = (String(req.body?.deliveryCounty || 'Siaya').trim() || 'Siaya').slice(0, 80);
+      const safeTown = (String(req.body?.deliveryTown || 'Siaya Town').trim() || 'Siaya Town').slice(0, 80);
+      const safeAddress = (
+        String(req.body?.deliveryAddress || 'Siaya Yard').trim() || 'Siaya Yard'
+      ).slice(0, 300);
+
       const orderData = {
         orderNumber,
         customerId: uid,
-        customerName: String(req.body?.customerName || req.session!.displayName).trim().slice(0, 120),
-        customerPhone: String(req.body?.customerPhone || req.session!.phone).trim().slice(0, 30),
-        customerEmail: String(req.body?.customerEmail || req.session!.email || 'customer@delarico.co.ke').trim().slice(0, 254),
+        customerName: safeCustomerName.length >= 2 ? safeCustomerName : 'Customer',
+        customerPhone: safeCustomerPhone.length >= 7 ? safeCustomerPhone : '+254706824489',
+        customerEmail: safeCustomerEmail.length >= 3 ? safeCustomerEmail : 'customer@delarico.co.ke',
         accountType: ['individual', 'contractor', 'institution'].includes(req.body?.accountType)
           ? req.body.accountType
           : 'individual',
-        branchId: String(req.body?.branchId || 'branch-siaya-hq').slice(0, 128),
-        deliveryCounty: String(req.body?.deliveryCounty || 'Siaya').trim().slice(0, 80),
-        deliveryTown: String(req.body?.deliveryTown || 'Siaya Town').trim().slice(0, 80),
-        deliveryAddress: String(req.body?.deliveryAddress || 'Siaya Yard').trim().slice(0, 300),
-        deliveryMethod: ['pickup', 'local_siaya', 'regional_nyanza', 'countrywide_freight'].includes(req.body?.deliveryMethod)
-          ? req.body.deliveryMethod
-          : 'local_siaya',
-        subtotalKes: Math.max(0, Number(req.body?.subtotalKes || 0)),
-        discountKes: Math.max(0, Number(req.body?.discountKes || 0)),
-        promoCode: String(req.body?.promoCode || '').trim().slice(0, 40),
-        deliveryFeeKes: Math.max(0, Number(req.body?.deliveryFeeKes || 0)),
-        totalKes: Math.max(0, Number(req.body?.totalKes || 0)),
-        itemCount: itemsInput.length,
+        branchId:
+          String(req.body?.branchId || 'branch-siaya-hq').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) ||
+          'branch-siaya-hq',
+        deliveryCounty: safeCounty.length >= 2 ? safeCounty : 'Siaya',
+        deliveryTown: safeTown.length >= 2 ? safeTown : 'Siaya Town',
+        deliveryAddress: safeAddress.length >= 2 ? safeAddress : 'Siaya Yard',
+        deliveryMethod,
+        subtotalKes,
+        discountKes,
+        promoCode: appliedPromoCode,
+        deliveryFeeKes,
+        totalKes,
+        itemCount: resolvedItems.length,
         paymentMethod: ['mpesa_stk', 'mpesa_paybill', 'mpesa_till', 'bank_transfer', 'cod'].includes(req.body?.paymentMethod)
           ? req.body.paymentMethod
           : 'mpesa_paybill',
@@ -1170,19 +1676,19 @@ export function createApiApp(): Express {
       const itemOps: GatedWriteOp[] = [];
       const confirmedItems: Array<Record<string, unknown>> = [];
 
-      itemsInput.forEach((rawItem: Record<string, unknown>, idx: number) => {
+      resolvedItems.forEach((item, idx) => {
         const itemId = `item_${idx + 1}`;
         const itemRef = doc(db, 'orders', orderRef.id, 'items', itemId);
         const itemPayload = {
           orderId: orderRef.id,
           customerId: uid,
-          productId: String(rawItem.productId || '').slice(0, 128),
-          productName: String(rawItem.productName || 'Material').slice(0, 160),
-          sku: String(rawItem.sku || 'DLR-ITEM').slice(0, 64),
-          unit: String(rawItem.unit || 'Piece').slice(0, 40),
-          quantity: Math.max(1, Number(rawItem.quantity || 1)),
-          unitPriceKes: Math.max(0, Number(rawItem.unitPriceKes || 0)),
-          lineTotalKes: Math.max(0, Number(rawItem.lineTotalKes || 0)),
+          productId: item.productId,
+          productName: item.productName,
+          sku: item.sku,
+          unit: item.unit,
+          quantity: item.quantity,
+          unitPriceKes: item.unitPriceKes,
+          lineTotalKes: item.lineTotalKes,
           vaultKey: SERVER_VAULT_KEY,
           createdAt: now,
         };
@@ -1232,32 +1738,18 @@ export function createApiApp(): Express {
           where('affiliateCode', '==', rawAffiliateCode)
         );
         const affiliate = matchedAffiliates[0];
-        if (affiliate && affiliate.status === 'active') {
+        if (affiliate && affiliate.status === 'active' && String(affiliate.uid) !== uid) {
           const affUid = String(affiliate.uid);
           const baseRate = Math.min(5, Math.max(3, Number(affiliate.commissionRatePct || 3)));
           let weightedCommissionKes = 0;
 
-          for (const rawItem of itemsInput as Array<Record<string, unknown>>) {
-            const prodId = String(rawItem.productId || '');
-            const lineTotal = Math.max(0, Number(rawItem.lineTotalKes || 0));
-            let catId =
-              INITIAL_PRODUCTS.find((p) => p.id === prodId)?.categoryId || 'cat-building-materials';
-            if (prodId) {
-              try {
-                const pSnap = await getDoc(doc(db, 'products', prodId));
-                if (pSnap.exists()) {
-                  catId = String(pSnap.data()?.categoryId || catId);
-                }
-              } catch {
-                // Fallback to INITIAL_PRODUCTS or default category
-              }
-            }
-            const itemRate = getProductCommissionRatePct(catId, baseRate);
-            weightedCommissionKes += (lineTotal * itemRate) / 100;
+          for (const item of resolvedItems) {
+            const itemRate = getProductCommissionRatePct(item.categoryId, baseRate);
+            weightedCommissionKes += (item.lineTotalKes * itemRate) / 100;
           }
 
-          const netSubtotal = Math.max(1, orderData.subtotalKes - orderData.discountKes);
-          const discountRatio = orderData.subtotalKes > 0 ? netSubtotal / orderData.subtotalKes : 1;
+          const netSubtotal = Math.max(1, subtotalKes - discountKes);
+          const discountRatio = subtotalKes > 0 ? netSubtotal / subtotalKes : 1;
           const finalCommissionKes = Math.max(1, Math.round(weightedCommissionKes * discountRatio));
           const effectiveRatePct = Math.min(
             5,
@@ -1399,15 +1891,38 @@ export function createApiApp(): Express {
   app.post('/api/customer/quotations', requireAuth, async (req: AuthedRequest, res: Response) => {
     try {
       const uid = req.session!.uid;
-      const itemsInput = Array.isArray(req.body?.items) ? req.body.items : [];
-      if (itemsInput.length === 0) {
-        res.status(400).json({ error: 'Please include at least one material item.' });
+      const itemsInput: Array<Record<string, unknown>> = Array.isArray(req.body?.items)
+        ? (req.body.items as Array<Record<string, unknown>>)
+        : [];
+      if (itemsInput.length === 0 || itemsInput.length > 200) {
+        res.status(400).json({
+          error: itemsInput.length === 0
+            ? 'Please include at least one material item.'
+            : 'Quotation request cannot exceed 200 line items.',
+        });
         return;
       }
 
+      const cleanItems = itemsInput.map((rawItem) => {
+        const qty = Math.max(1, Math.round(Number(rawItem.quantity || 1)));
+        const unitPrice = Math.max(0, Number(rawItem.unitPriceKes || 0));
+        return {
+          productId: String(rawItem.productId || `custom_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) || 'custom_item',
+          productName: (String(rawItem.productName || 'Construction Material').trim() || 'Construction Material').slice(0, 160),
+          unit: (String(rawItem.unit || 'Piece').trim() || 'Piece').slice(0, 40),
+          quantity: qty,
+          unitPriceKes: unitPrice,
+        };
+      });
+
+      const computedSubtotal = cleanItems.reduce((sum, item) => sum + item.quantity * item.unitPriceKes, 0);
       const quoteRef = doc(collection(db, 'quotations'));
-      const quoteNumber = `QT-${Date.now().toString().slice(-6)}`;
+      const quoteNumber = `QT-${Date.now().toString().slice(-6)}${crypto.randomBytes(1).toString('hex').toUpperCase()}`;
       const now = serverTimestamp();
+
+      const contactName = (String(req.body?.contactName || req.session!.displayName || 'Client').trim() || 'Client').slice(0, 120);
+      const phone = (String(req.body?.phone || req.session!.phone || '+254706824489').trim() || '+254706824489').slice(0, 30);
+      const email = (String(req.body?.email || req.session!.email || 'client@delarico.co.ke').trim() || 'client@delarico.co.ke').slice(0, 254);
 
       await commitGatedOps([
         {
@@ -1417,15 +1932,15 @@ export function createApiApp(): Express {
           data: {
             quoteNumber,
             customerId: uid,
-            contactName: String(req.body?.contactName || req.session!.displayName).trim().slice(0, 120),
+            contactName: contactName.length >= 2 ? contactName : 'Client',
             companyName: String(req.body?.companyName || '').trim().slice(0, 160),
-            phone: String(req.body?.phone || req.session!.phone).trim().slice(0, 30),
-            email: String(req.body?.email || req.session!.email || 'client@delarico.co.ke').trim().slice(0, 254),
-            deliveryLocation: String(req.body?.deliveryLocation || 'Siaya').trim().slice(0, 250),
-            projectType: String(req.body?.projectType || 'Residential Construction').trim().slice(0, 100),
+            phone: phone.length >= 7 ? phone : '+254706824489',
+            email: email.length >= 3 ? email : 'client@delarico.co.ke',
+            deliveryLocation: (String(req.body?.deliveryLocation || 'Siaya').trim() || 'Siaya').slice(0, 250),
+            projectType: (String(req.body?.projectType || 'Residential Construction').trim() || 'Residential Construction').slice(0, 100),
             instructions: String(req.body?.instructions || '').trim().slice(0, 1500),
-            itemCount: itemsInput.length,
-            estimatedSubtotalKes: Math.max(0, Number(req.body?.estimatedSubtotalKes || 0)),
+            itemCount: cleanItems.length,
+            estimatedSubtotalKes: Math.max(0, computedSubtotal || Number(req.body?.estimatedSubtotalKes || 0)),
             quotedTotalKes: 0,
             adminResponseNotes: '',
             validUntil: '',
@@ -1437,7 +1952,7 @@ export function createApiApp(): Express {
         },
       ]);
 
-      const itemOps: GatedWriteOp[] = itemsInput.map((rawItem: Record<string, unknown>, idx: number) => {
+      const itemOps: GatedWriteOp[] = cleanItems.map((item, idx) => {
         const itemId = `qitem_${idx + 1}`;
         return {
           type: 'set',
@@ -1446,11 +1961,11 @@ export function createApiApp(): Express {
           data: {
             quotationId: quoteRef.id,
             customerId: uid,
-            productId: String(rawItem.productId || '').slice(0, 128),
-            productName: String(rawItem.productName || 'Material').slice(0, 160),
-            unit: String(rawItem.unit || 'Piece').slice(0, 40),
-            quantity: Math.max(1, Number(rawItem.quantity || 1)),
-            unitPriceKes: Math.max(0, Number(rawItem.unitPriceKes || 0)),
+            productId: item.productId,
+            productName: item.productName,
+            unit: item.unit,
+            quantity: item.quantity,
+            unitPriceKes: item.unitPriceKes,
             vaultKey: SERVER_VAULT_KEY,
             createdAt: now,
           },
@@ -1497,7 +2012,7 @@ export function createApiApp(): Express {
     }
   });
 
-  app.post('/api/customer/enquiries', async (req: Request, res: Response) => {
+  app.post('/api/customer/enquiries', publicWriteRateLimit, async (req: Request, res: Response) => {
     try {
       const session = extractBearer(req);
       const customerId = session ? session.uid : 'guest_visitor';
@@ -1511,6 +2026,14 @@ export function createApiApp(): Express {
         ? enquiryTypeRaw
         : 'general';
 
+      const name = (String(req.body?.name || session?.displayName || 'Visitor').trim() || 'Visitor').slice(0, 120);
+      const subject = (String(req.body?.subject || 'Website Enquiry').trim() || 'Website Enquiry').slice(0, 160);
+      const message = String(req.body?.message || '').trim().slice(0, 2000);
+      if (message.length < 5) {
+        res.status(400).json({ error: 'Please enter enquiry details (at least 5 characters).' });
+        return;
+      }
+
       await commitGatedOps([
         {
           type: 'set',
@@ -1519,12 +2042,12 @@ export function createApiApp(): Express {
           data: {
             customerId,
             enquiryType,
-            name: String(req.body?.name || session?.displayName || 'Visitor').trim().slice(0, 120),
+            name: name.length >= 2 ? name : 'Visitor',
             companyName: String(req.body?.companyName || '').trim().slice(0, 160),
-            phone: String(req.body?.phone || session?.phone || '+254 706 824489').trim().slice(0, 30),
-            email: String(req.body?.email || session?.email || 'info@delarico.co.ke').trim().slice(0, 254),
-            subject: String(req.body?.subject || 'Website Enquiry').trim().slice(0, 160),
-            message: String(req.body?.message || '').trim().slice(0, 2000),
+            phone: String(req.body?.phone || session?.phone || '+254 706 824489').trim().slice(0, 30) || '+254 706 824489',
+            email: String(req.body?.email || session?.email || 'info@delarico.co.ke').trim().slice(0, 254) || 'info@delarico.co.ke',
+            subject: subject.length >= 2 ? subject : 'Website Enquiry',
+            message,
             status: 'open',
             adminReply: '',
             vaultKey: SERVER_VAULT_KEY,
@@ -1540,7 +2063,7 @@ export function createApiApp(): Express {
     }
   });
 
-  app.post('/api/customer/reviews', async (req: AuthedRequest, res: Response) => {
+  app.post('/api/customer/reviews', publicWriteRateLimit, async (req: AuthedRequest, res: Response) => {
     try {
       const session = extractBearer(req);
       const productId = String(req.body?.productId || '').trim().slice(0, 128);
@@ -1568,6 +2091,7 @@ export function createApiApp(): Express {
       const revRef = doc(collection(db, 'reviews'));
       const now = serverTimestamp();
       const customerId = session ? session.uid : `cust_guest_${crypto.randomBytes(6).toString('hex')}`;
+      const safeProductName = productName.length >= 2 ? productName : 'Construction Material';
 
       const ops: GatedWriteOp[] = [
         {
@@ -1576,7 +2100,7 @@ export function createApiApp(): Express {
           gateKey: `rev_${revRef.id}`,
           data: {
             productId,
-            productName: productName.length >= 2 ? productName : 'Construction Material',
+            productName: safeProductName,
             customerId,
             customerName,
             rating,
@@ -1613,7 +2137,25 @@ export function createApiApp(): Express {
       }
 
       await commitGatedOps(ops);
-      res.json({ ok: true, id: revRef.id });
+      invalidateCatalogCaches();
+      res.json({
+        ok: true,
+        id: revRef.id,
+        review: {
+          id: revRef.id,
+          productId,
+          productName: safeProductName,
+          customerId,
+          customerName,
+          rating,
+          title,
+          comment,
+          verifiedBuyer: false,
+          status: 'published',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      });
     } catch (err) {
       console.error('Create review error:', err);
       res.status(500).json({ error: 'Failed to publish review.' });
@@ -1801,7 +2343,7 @@ export function createApiApp(): Express {
   // =========================================================================
   // Privacy-Compliant Newsletter Endpoints
   // =========================================================================
-  app.post('/api/newsletter/subscribe', async (req: Request, res: Response) => {
+  app.post('/api/newsletter/subscribe', publicWriteRateLimit, async (req: Request, res: Response) => {
     try {
       const rawEmail = String(req.body?.email || '').trim().toLowerCase().slice(0, 254);
       const privacyConsent = Boolean(req.body?.privacyConsent);
@@ -2232,22 +2774,35 @@ export function createApiApp(): Express {
     try {
       const prodId = String(req.body?.id || `prod-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
       const now = serverTimestamp();
-      const { id: _ignore, ...payload } = req.body as Record<string, unknown>;
-      const rawDesc = String(payload.description || payload.name || '').trim();
+      const payload = req.body as Record<string, unknown>;
+      const rawName = (String(payload.name || 'Construction Material').trim() || 'Construction Material').slice(0, 160);
+      const name = rawName.length >= 2 ? rawName : 'Material Item';
+      const rawDesc = String(payload.description || name).trim();
       const description = (
         rawDesc.length >= 10
           ? rawDesc
           : `${rawDesc || 'Hardware item'} — Certified Kenyan hardware supply from Delarico.`
       ).slice(0, 3000);
-      const rawSlug = String(payload.slug || payload.name || prodId)
+      const rawSlug = String(payload.slug || name || prodId)
         .toLowerCase()
         .replace(/[^a-z0-9-]+/g, '-')
         .replace(/(^-|-$)/g, '');
       const slug = (rawSlug.length >= 2 ? rawSlug : `item-${Date.now()}`).slice(0, 160);
       const rawSku = String(payload.sku || `DLR-${Date.now()}`)
         .toUpperCase()
-        .replace(/[^A-Z0-9-]+/g, '-');
+        .replace(/[^A-Z0-9-]+/g, '-')
+        .replace(/(^-|-$)/g, '');
       const sku = (rawSku.length >= 2 ? rawSku : `DLR-${Date.now()}`).slice(0, 64);
+
+      const categoryId = String(payload.categoryId || 'cat-building-materials').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) || 'cat-building-materials';
+      const categoryNameRaw = String(payload.categoryName || 'Building Materials').trim().slice(0, 100);
+      const specSummaryRaw = String(payload.specSummary || 'KEBS Certified Yard Stock').trim().slice(0, 1000);
+      const dimensionsRaw = String(payload.dimensions || 'Standard').trim().slice(0, 200);
+      const brandRaw = String(payload.brand || 'Delarico').trim().slice(0, 120);
+      const unitRaw = String(payload.unit || 'Piece').trim().slice(0, 40);
+      const imgs = hasOnlyRealPhotos(payload.images)
+        ? (payload.images as string[]).slice(0, 6)
+        : resolveRealGalleryForRecord(prodId, { name, categoryName: categoryNameRaw, slug });
 
       await commitGatedOps([
         {
@@ -2255,21 +2810,38 @@ export function createApiApp(): Express {
           ref: doc(db, 'products', prodId),
           gateKey: `prod_${prodId}`,
           data: {
-            ...payload,
+            name,
             slug,
             sku,
+            categoryId,
+            categoryName: categoryNameRaw.length >= 2 ? categoryNameRaw : 'Materials',
             description,
+            specSummary: specSummaryRaw.length >= 2 ? specSummaryRaw : 'Yard Certified',
+            dimensions: dimensionsRaw.length >= 1 ? dimensionsRaw : 'Standard',
+            brand: brandRaw.length >= 1 ? brandRaw : 'Delarico',
+            unit: unitRaw.length >= 1 ? unitRaw : 'Piece',
+            priceKes: Math.max(0, Number(payload.priceKes ?? 0)),
+            wholesalePriceKes: Math.max(0, Number(payload.wholesalePriceKes ?? 0)),
+            minWholesaleQty: Math.max(1, Number(payload.minWholesaleQty ?? 1)),
+            compareAtPriceKes: Math.max(0, Number(payload.compareAtPriceKes ?? 0)),
+            stockQty: Math.max(0, Number(payload.stockQty ?? 0)),
+            lowStockThreshold: Math.max(0, Number(payload.lowStockThreshold ?? 10)),
+            weightKg: Math.max(0, Number(payload.weightKg ?? 1)),
+            images: imgs,
+            featured: Boolean(payload.featured),
+            bestSeller: Boolean(payload.bestSeller),
+            onPromotion: Boolean(payload.onPromotion),
+            promoLabel: String(payload.promoLabel || '').trim().slice(0, 80),
             isActive: payload.isActive === undefined ? true : Boolean(payload.isActive),
-            ratingAvg: Number(payload.ratingAvg ?? 5.0),
-            reviewCount: Number(payload.reviewCount ?? 0),
+            ratingAvg: Math.min(5, Math.max(0, Number(payload.ratingAvg ?? 5.0))),
+            reviewCount: Math.max(0, Number(payload.reviewCount ?? 0)),
             vaultKey: SERVER_VAULT_KEY,
             createdAt: now,
             updatedAt: now,
           },
         },
       ]);
-      cachedCatalogSummary = '';
-      cachedCatalogSummaryAt = 0;
+      invalidateCatalogCaches();
       res.json({ ok: true, id: prodId });
     } catch (err) {
       console.error('Create product error:', err);
@@ -2279,29 +2851,60 @@ export function createApiApp(): Express {
 
   app.put('/api/ops/products/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
     try {
-      const prodId = String(req.params.id);
-      const { id: _ignore, createdAt: _ca, ...payload } = req.body as Record<string, unknown>;
+      const prodId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const prodRef = doc(db, 'products', prodId);
+      const payload = req.body as Record<string, unknown>;
       const patchData: Record<string, unknown> = {
-        ...payload,
         vaultKey: SERVER_VAULT_KEY,
         updatedAt: serverTimestamp(),
       };
+      if (payload.name !== undefined) {
+        const n = String(payload.name).trim().slice(0, 160);
+        if (n.length >= 2) patchData.name = n;
+      }
+      if (payload.slug !== undefined) {
+        const s = String(payload.slug).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 160);
+        if (s.length >= 2) patchData.slug = s;
+      }
+      if (payload.sku !== undefined) {
+        const k = String(payload.sku).toUpperCase().replace(/[^A-Z0-9-]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 64);
+        if (k.length >= 2) patchData.sku = k;
+      }
+      if (payload.categoryId !== undefined) patchData.categoryId = String(payload.categoryId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+      if (payload.categoryName !== undefined) patchData.categoryName = (String(payload.categoryName).trim() || 'Materials').slice(0, 100);
       if (typeof payload.description === 'string') {
         const d = payload.description.trim();
         patchData.description = (
           d.length >= 10 ? d : `${d || 'Hardware item'} — Certified Kenyan hardware supply.`
         ).slice(0, 3000);
       }
+      if (payload.specSummary !== undefined) patchData.specSummary = (String(payload.specSummary).trim() || 'Yard Certified').slice(0, 1000);
+      if (payload.dimensions !== undefined) patchData.dimensions = (String(payload.dimensions).trim() || 'Standard').slice(0, 200);
+      if (payload.brand !== undefined) patchData.brand = (String(payload.brand).trim() || 'Delarico').slice(0, 120);
+      if (payload.unit !== undefined) patchData.unit = (String(payload.unit).trim() || 'Piece').slice(0, 40);
+      if (payload.priceKes !== undefined) patchData.priceKes = Math.max(0, Number(payload.priceKes));
+      if (payload.wholesalePriceKes !== undefined) patchData.wholesalePriceKes = Math.max(0, Number(payload.wholesalePriceKes));
+      if (payload.minWholesaleQty !== undefined) patchData.minWholesaleQty = Math.max(1, Number(payload.minWholesaleQty));
+      if (payload.compareAtPriceKes !== undefined) patchData.compareAtPriceKes = Math.max(0, Number(payload.compareAtPriceKes));
+      if (payload.stockQty !== undefined) patchData.stockQty = Math.max(0, Number(payload.stockQty));
+      if (payload.lowStockThreshold !== undefined) patchData.lowStockThreshold = Math.max(0, Number(payload.lowStockThreshold));
+      if (payload.weightKg !== undefined) patchData.weightKg = Math.max(0, Number(payload.weightKg));
+      if (hasOnlyRealPhotos(payload.images)) patchData.images = (payload.images as string[]).slice(0, 6);
+      if (payload.featured !== undefined) patchData.featured = Boolean(payload.featured);
+      if (payload.bestSeller !== undefined) patchData.bestSeller = Boolean(payload.bestSeller);
+      if (payload.onPromotion !== undefined) patchData.onPromotion = Boolean(payload.onPromotion);
+      if (payload.promoLabel !== undefined) patchData.promoLabel = String(payload.promoLabel).trim().slice(0, 80);
+      if (payload.isActive !== undefined) patchData.isActive = Boolean(payload.isActive);
+
       await commitGatedOps([
         {
           type: 'update',
-          ref: doc(db, 'products', prodId),
+          ref: prodRef,
           gateKey: `prod_${prodId}`,
           data: patchData,
         },
       ]);
-      cachedCatalogSummary = '';
-      cachedCatalogSummaryAt = 0;
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Update product error:', err);
@@ -2341,8 +2944,7 @@ export function createApiApp(): Express {
           data: updates,
         },
       ]);
-      cachedCatalogSummary = '';
-      cachedCatalogSummaryAt = 0;
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Quick update product error:', err);
@@ -2352,7 +2954,7 @@ export function createApiApp(): Express {
 
   app.delete('/api/ops/products/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
     try {
-      const prodId = String(req.params.id);
+      const prodId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
       await commitGatedOps([
         {
           type: 'delete',
@@ -2360,8 +2962,7 @@ export function createApiApp(): Express {
           gateKey: `prod_${prodId}`,
         },
       ]);
-      cachedCatalogSummary = '';
-      cachedCatalogSummaryAt = 0;
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Delete product error:', err);
@@ -2373,20 +2974,32 @@ export function createApiApp(): Express {
     try {
       const catId = String(req.body?.id || `cat-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
       const now = serverTimestamp();
-      const { id: _ignore, ...payload } = req.body as Record<string, unknown>;
+      const payload = req.body as Record<string, unknown>;
+      const name = (String(payload.name || 'Hardware Category').trim() || 'Hardware Category').slice(0, 100);
+      const rawSlug = String(payload.slug || name).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/(^-|-$)/g, '');
+      const slug = (rawSlug.length >= 2 ? rawSlug : `cat-${Date.now()}`).slice(0, 100);
+      const rawDesc = String(payload.description || '').trim();
+      const description = (rawDesc.length >= 5 ? rawDesc : `${name} materials supplied by Delarico.`).slice(0, 500);
+      const imageUrl = String(payload.imageUrl || '/assets/aistudio/cement.jpg').slice(0, 120000);
+
       await commitGatedOps([
         {
           type: 'set',
           ref: doc(db, 'categories', catId),
           gateKey: `cat_${catId}`,
           data: {
-            ...payload,
+            name: name.length >= 2 ? name : 'Hardware',
+            slug,
+            description,
+            imageUrl,
+            sortOrder: Number(payload.sortOrder ?? 10),
             isActive: true,
             createdAt: now,
             updatedAt: now,
           },
         },
       ]);
+      invalidateCatalogCaches();
       res.json({ ok: true, id: catId });
     } catch (err) {
       console.error('Create category error:', err);
@@ -2404,6 +3017,7 @@ export function createApiApp(): Express {
           gateKey: `cat_${catId}`,
         },
       ]);
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Delete category error:', err);
@@ -2840,22 +3454,42 @@ export function createApiApp(): Express {
     try {
       const promoId = String(req.body?.id || `promo-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
       const now = serverTimestamp();
-      const { id: _ignore, ...payload } = req.body as Record<string, unknown>;
+      const payload = req.body as Record<string, unknown>;
+      const rawCode = String(payload.code || `DLR${Date.now().toString().slice(-4)}`)
+        .toUpperCase()
+        .replace(/[^A-Z0-9-]+/g, '-')
+        .replace(/(^-|-$)/g, '')
+        .slice(0, 32);
+      const code = rawCode.length >= 3 ? rawCode : `DLR${Date.now().toString().slice(-4)}`;
+      const rawTitle = (String(payload.title || 'Yard Promotion').trim() || 'Yard Promotion').slice(0, 120);
+      const title = rawTitle.length >= 2 ? rawTitle : 'Yard Promotion';
+      const rawDesc = String(payload.description || title).trim();
+      const description = (rawDesc.length >= 5 ? rawDesc : `${title} — Valid at Delarico Yard.`).slice(0, 400);
+      const discountType = payload.discountType === 'fixed_kes' ? 'fixed_kes' : 'percentage';
+      const discountValue = Math.max(1, Number(payload.discountValue ?? 5));
+      const minOrderKes = Math.max(0, Number(payload.minOrderKes ?? 0));
+      const expiresAt = String(payload.expiresAt || '2026-12-31').trim().slice(0, 40);
+
       await commitGatedOps([
         {
           type: 'set',
           ref: doc(db, 'promotions', promoId),
           gateKey: `promo_${promoId}`,
           data: {
-            ...payload,
+            code,
+            title,
+            description,
+            discountType,
+            discountValue,
+            minOrderKes,
             isActive: true,
+            expiresAt,
             createdAt: now,
             updatedAt: now,
           },
         },
       ]);
-      cachedCatalogSummary = '';
-      cachedCatalogSummaryAt = 0;
+      invalidateCatalogCaches();
       res.json({ ok: true, id: promoId });
     } catch (err) {
       console.error('Create promo error:', err);
@@ -2881,8 +3515,7 @@ export function createApiApp(): Express {
           data: updates,
         },
       ]);
-      cachedCatalogSummary = '';
-      cachedCatalogSummaryAt = 0;
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Update promo error:', err);
@@ -2900,8 +3533,7 @@ export function createApiApp(): Express {
           gateKey: `promo_${promoId}`,
         },
       ]);
-      cachedCatalogSummary = '';
-      cachedCatalogSummaryAt = 0;
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Delete promo error:', err);
@@ -2913,14 +3545,37 @@ export function createApiApp(): Express {
     try {
       const branchId = String(req.body?.id || `branch-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
       const now = serverTimestamp();
-      const { id: _ignore, ...payload } = req.body as Record<string, unknown>;
+      const payload = req.body as Record<string, unknown>;
+      const name = (String(payload.name || 'Regional Yard').trim() || 'Regional Yard').slice(0, 120);
+      const rawCode = String(payload.code || `DLR-${Date.now().toString().slice(-3)}`)
+        .toUpperCase()
+        .replace(/[^A-Z0-9-]+/g, '-')
+        .replace(/(^-|-$)/g, '')
+        .slice(0, 24);
+      const code = rawCode.length >= 2 ? rawCode : `BR-${Date.now().toString().slice(-3)}`;
+      const county = (String(payload.county || 'Siaya').trim() || 'Siaya').slice(0, 80);
+      const town = (String(payload.town || 'Siaya Town').trim() || 'Siaya Town').slice(0, 80);
+      const rawAddr = String(payload.address || `${town} Supply Yard`).trim();
+      const address = (rawAddr.length >= 5 ? rawAddr : `${rawAddr} Yard Depot`).slice(0, 250);
+      const rawPhone = String(payload.phone || '+254 706 824489').trim();
+      const phone = (rawPhone.length >= 7 ? rawPhone : '+254 706 824489').slice(0, 30);
+      const managerName = (String(payload.managerName || 'Branch Operations Manager').trim() || 'Branch Operations Manager').slice(0, 120);
+      const deliveryZones = (String(payload.deliveryZones || `${town} CBD, Surrounding Estates`).trim() || `${town} CBD`).slice(0, 300);
+
       await commitGatedOps([
         {
           type: 'set',
           ref: doc(db, 'branches', branchId),
           gateKey: `branch_${branchId}`,
           data: {
-            ...payload,
+            name: name.length >= 2 ? name : 'Regional Yard',
+            code,
+            county: county.length >= 2 ? county : 'Siaya',
+            town: town.length >= 2 ? town : 'Siaya Town',
+            address,
+            phone,
+            managerName: managerName.length >= 2 ? managerName : 'Yard Manager',
+            deliveryZones: deliveryZones.length >= 2 ? deliveryZones : 'Local Region',
             isHeadquarters: false,
             isActive: true,
             createdAt: now,
@@ -2928,6 +3583,7 @@ export function createApiApp(): Express {
           },
         },
       ]);
+      invalidateCatalogCaches();
       res.json({ ok: true, id: branchId });
     } catch (err) {
       console.error('Create branch error:', err);
@@ -2935,25 +3591,157 @@ export function createApiApp(): Express {
     }
   });
 
+  app.patch('/api/ops/branches/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const branchId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const branchRef = doc(db, 'branches', branchId);
+      const snap = await getDoc(branchRef);
+      if (!snap.exists()) {
+        res.status(404).json({ error: 'Branch not found.' });
+        return;
+      }
+      const updates: Record<string, unknown> = { updatedAt: serverTimestamp() };
+      if (req.body?.name !== undefined) {
+        const n = String(req.body.name).trim().slice(0, 120);
+        if (n.length >= 2) updates.name = n;
+      }
+      if (req.body?.phone !== undefined) {
+        const p = String(req.body.phone).trim().slice(0, 30);
+        if (p.length >= 7) updates.phone = p;
+      }
+      if (req.body?.address !== undefined) {
+        const a = String(req.body.address).trim().slice(0, 250);
+        if (a.length >= 5) updates.address = a;
+      }
+      if (req.body?.deliveryZones !== undefined) {
+        const z = String(req.body.deliveryZones).trim().slice(0, 300);
+        if (z.length >= 2) updates.deliveryZones = z;
+      }
+      if (req.body?.isActive !== undefined) updates.isActive = Boolean(req.body.isActive);
+
+      await commitGatedOps([
+        {
+          type: 'update',
+          ref: branchRef,
+          gateKey: `branch_${branchId}`,
+          data: updates,
+        },
+      ]);
+      invalidateCatalogCaches();
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Update branch error:', err);
+      res.status(500).json({ error: 'Failed to update branch.' });
+    }
+  });
+
+  app.delete('/api/ops/branches/:id', requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const branchId = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      if (branchId === 'branch-siaya-hq') {
+        res.status(400).json({ error: 'Primary Siaya Headquarters branch cannot be removed.' });
+        return;
+      }
+      await commitGatedOps([
+        {
+          type: 'delete',
+          ref: doc(db, 'branches', branchId),
+          gateKey: `branch_${branchId}`,
+        },
+      ]);
+      invalidateCatalogCaches();
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Delete branch error:', err);
+      res.status(500).json({ error: 'Failed to delete branch.' });
+    }
+  });
+
   app.put('/api/ops/settings', requireAdmin, async (req: AuthedRequest, res: Response) => {
     try {
-      const { updatedAt: _ua, ...payload } = req.body as Record<string, unknown>;
+      const incoming = req.body as Record<string, unknown>;
+      const merged = {
+        businessName: String(incoming.businessName ?? DEFAULT_STORE_SETTINGS.businessName).trim().slice(0, 160) || DEFAULT_STORE_SETTINGS.businessName,
+        tagline: String(incoming.tagline ?? DEFAULT_STORE_SETTINGS.tagline).trim().slice(0, 160) || DEFAULT_STORE_SETTINGS.tagline,
+        location: String(incoming.location ?? DEFAULT_STORE_SETTINGS.location).trim().slice(0, 160) || DEFAULT_STORE_SETTINGS.location,
+        whatsappNumber: String(incoming.whatsappNumber ?? DEFAULT_STORE_SETTINGS.whatsappNumber).trim().slice(0, 30) || DEFAULT_STORE_SETTINGS.whatsappNumber,
+        email: String(incoming.email ?? DEFAULT_STORE_SETTINGS.email).trim().slice(0, 254) || DEFAULT_STORE_SETTINGS.email,
+        website: String(incoming.website ?? DEFAULT_STORE_SETTINGS.website).trim().slice(0, 160) || DEFAULT_STORE_SETTINGS.website,
+        mpesaPaybillNumber: String(incoming.mpesaPaybillNumber ?? DEFAULT_STORE_SETTINGS.mpesaPaybillNumber).trim().slice(0, 30),
+        mpesaAccountPrefix: String(incoming.mpesaAccountPrefix ?? DEFAULT_STORE_SETTINGS.mpesaAccountPrefix).trim().slice(0, 30),
+        mpesaTillNumber: String(incoming.mpesaTillNumber ?? DEFAULT_STORE_SETTINGS.mpesaTillNumber).trim().slice(0, 30),
+        mpesaStkEnabled: Boolean(incoming.mpesaStkEnabled ?? DEFAULT_STORE_SETTINGS.mpesaStkEnabled),
+        bankName: String(incoming.bankName ?? DEFAULT_STORE_SETTINGS.bankName).trim().slice(0, 120),
+        bankAccountName: String(incoming.bankAccountName ?? DEFAULT_STORE_SETTINGS.bankAccountName).trim().slice(0, 160),
+        bankAccountNumber: String(incoming.bankAccountNumber ?? DEFAULT_STORE_SETTINGS.bankAccountNumber).trim().slice(0, 60),
+        bankBranch: String(incoming.bankBranch ?? DEFAULT_STORE_SETTINGS.bankBranch).trim().slice(0, 120),
+        codEnabled: Boolean(incoming.codEnabled ?? DEFAULT_STORE_SETTINGS.codEnabled),
+        freeDeliveryThresholdKes: Math.max(0, Number(incoming.freeDeliveryThresholdKes ?? DEFAULT_STORE_SETTINGS.freeDeliveryThresholdKes)),
+        loyaltyPointsPer1000Kes: Math.max(0, Number(incoming.loyaltyPointsPer1000Kes ?? DEFAULT_STORE_SETTINGS.loyaltyPointsPer1000Kes)),
+        isPublic: true,
+        updatedAt: serverTimestamp(),
+      };
       await commitGatedOps([
         {
           type: 'set',
           ref: doc(db, 'settings', 'corporate'),
           gateKey: 'set_corporate',
-          data: {
-            ...payload,
-            isPublic: true,
-            updatedAt: serverTimestamp(),
-          },
+          data: merged,
         },
       ]);
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Update settings error:', err);
       res.status(500).json({ error: 'Failed to save settings.' });
+    }
+  });
+
+  app.get('/api/ops/analytics', requireAdmin, async (_req: AuthedRequest, res: Response) => {
+    try {
+      const [orders, quotations, customers, affiliates, subscribers, prodsSnap] = await Promise.all([
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'orders')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'quotations')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'users')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'affiliates')),
+        queryVaultDocs<Record<string, unknown>>(collection(db, 'newsletterSubscribers')),
+        getDocs(query(collection(db, 'products'), where('isActive', '==', true))),
+      ]);
+
+      const activeOrders = orders.filter((o) => o.orderStatus !== 'cancelled');
+      const paidRevenueKes = activeOrders
+        .filter((o) => o.paymentStatus === 'verified_paid')
+        .reduce((sum, o) => sum + Number(o.totalKes || 0), 0);
+      const pendingVerificationKes = activeOrders
+        .filter((o) => o.paymentStatus === 'pending_verification')
+        .reduce((sum, o) => sum + Number(o.totalKes || 0), 0);
+      const lowStockProducts = prodsSnap.docs
+        .map((d) => sanitizeClientDoc<Record<string, unknown>>(d.id, d.data()))
+        .filter((p) => Number(p.stockQty || 0) <= Number(p.lowStockThreshold || 0));
+
+      res.json({
+        totalOrders: orders.length,
+        paidRevenueKes,
+        pendingVerificationKes,
+        openQuotations: quotations.filter((q) => q.status === 'submitted').length,
+        totalCustomers: customers.length,
+        activeAffiliates: affiliates.filter((a) => a.status === 'active').length,
+        affiliateCommissionOwedKes: affiliates.reduce(
+          (sum, a) => sum + Number(a.availableCommissionKes || 0),
+          0
+        ),
+        activeSubscribers: subscribers.filter((s) => s.status === 'subscribed').length,
+        lowStockCount: lowStockProducts.length,
+        lowStockProducts: lowStockProducts.map((p) => ({
+          id: p.id,
+          name: p.name,
+          sku: p.sku,
+          stockQty: p.stockQty,
+        })),
+      });
+    } catch (err) {
+      console.error('Ops analytics error:', err);
+      res.status(500).json({ error: 'Failed to compute operations analytics.' });
     }
   });
 
@@ -3041,6 +3829,7 @@ export function createApiApp(): Express {
   app.post('/api/ops/seed', requireAdmin, async (_req: AuthedRequest, res: Response) => {
     try {
       await syncCatalogToFirestore(true);
+      invalidateCatalogCaches();
       res.json({ ok: true });
     } catch (err) {
       console.error('Manual seed error:', err);
@@ -3142,7 +3931,7 @@ ${catalogLines}`;
     return cachedCatalogSummary;
   }
 
-  app.post('/api/ai/chat', async (req: Request, res: Response) => {
+  app.post('/api/ai/chat', aiRateLimit, async (req: Request, res: Response) => {
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
@@ -3268,6 +4057,13 @@ ${platformContext}`;
 
   app.use('/api', (_req: Request, res: Response) => {
     res.status(404).json({ error: 'API endpoint not found.' });
+  });
+
+  app.use('/api', (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    console.error('Unhandled API error:', err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Internal server error.',
+    });
   });
 
   return app;

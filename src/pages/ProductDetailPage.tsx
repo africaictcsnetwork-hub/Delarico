@@ -53,6 +53,7 @@ export const ProductDetailPage: React.FC = () => {
   const [reviewComment, setReviewComment] = useState('');
   const [ratingFilter, setRatingFilter] = useState<'all' | '5' | '4' | '3below'>('all');
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [postedReviews, setPostedReviews] = useState<typeof reviews>([]);
 
   useEffect(() => {
     const autoName = userProfile?.displayName || user?.displayName || '';
@@ -62,10 +63,13 @@ export const ProductDetailPage: React.FC = () => {
   }, [userProfile, user]);
 
   // Compute live reviews & dynamic stars for this product
-  const productReviews = useMemo(
-    () => (product ? reviews.filter((r) => r.productId === product.id) : []),
-    [reviews, product]
-  );
+  const productReviews = useMemo(() => {
+    if (!product) return [];
+    const base = reviews.filter((r) => r.productId === product.id);
+    const seenIds = new Set(base.map((r) => r.id));
+    const extras = postedReviews.filter((r) => r.productId === product.id && !seenIds.has(r.id));
+    return [...extras, ...base];
+  }, [reviews, postedReviews, product]);
 
   const filteredReviews = useMemo(() => {
     if (ratingFilter === '5') return productReviews.filter((r) => r.rating === 5);
@@ -155,7 +159,7 @@ export const ProductDetailPage: React.FC = () => {
     }
     setSubmittingReview(true);
     try {
-      await apiFetch('/api/customer/reviews', {
+      const resp = await apiFetch<{ review?: (typeof reviews)[number] }>('/api/customer/reviews', {
         method: 'POST',
         body: JSON.stringify({
           productId: product.id,
@@ -166,6 +170,9 @@ export const ProductDetailPage: React.FC = () => {
           comment: reviewComment.trim(),
         }),
       });
+      if (resp.review) {
+        setPostedReviews((prev) => [resp.review!, ...prev]);
+      }
       setReviewTitle('');
       setReviewComment('');
       notify('Thank you! Your star rating & review have been published.', 'success');

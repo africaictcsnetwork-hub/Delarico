@@ -345,7 +345,7 @@ export const AdminDashboardPage: React.FC = () => {
   }
 
   if (!user || !isAdmin) {
-    return <Navigate to="/account" replace />;
+    return <Navigate to="/account?redirect=/portal/workspace" replace />;
   }
 
   // Action Handlers
@@ -3069,14 +3069,33 @@ export const AdminDashboardPage: React.FC = () => {
 
                   <div className="pt-4 border-t border-slate-100 divide-y divide-slate-100 text-xs">
                     {branches.map((b) => (
-                      <div key={b.id} className="py-2.5 flex items-center justify-between">
+                      <div key={b.id} className="py-2.5 flex items-center justify-between gap-3">
                         <div>
                           <span className="font-bold text-slate-900">{b.name}</span> ({b.code}) —{' '}
                           {b.town}, {b.county}
                         </div>
-                        <span className="text-slate-500">
-                          {b.isHeadquarters ? 'Headquarters' : 'Regional Yard'}
-                        </span>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className="text-slate-500">
+                            {b.isHeadquarters ? 'Headquarters' : 'Regional Yard'}
+                          </span>
+                          {!b.isHeadquarters && b.id !== 'branch-siaya-hq' && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await apiFetch(`/api/ops/branches/${b.id}`, { method: 'DELETE' });
+                                  notify(`Removed branch ${b.name}.`, 'info');
+                                } catch (err) {
+                                  notify(err instanceof Error ? err.message : 'Could not delete branch.', 'error');
+                                }
+                              }}
+                              className="p-1 text-slate-400 hover:text-rose-600"
+                              title={`Remove ${b.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>

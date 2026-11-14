@@ -4,11 +4,8 @@ Options -MultiViews
   RewriteEngine On
   RewriteBase /
 
-  # Enforce HTTPS on delarico.co.ke (safe behind cPanel AutoSSL & reverse proxies)
-  RewriteCond %{HTTP_HOST} ^(www\.)?delarico\.co\.ke$ [NC]
-  RewriteCond %{HTTPS} !=on
-  RewriteCond %{HTTP:X-Forwarded-Proto} !https
-  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+  # Allow cPanel AutoSSL / Let's Encrypt validation cleanly without redirects or SPA rewrites
+  RewriteRule ^\.well-known/ - [L]
 
   # Leave /api/* routes untouched so Apache does not rewrite API calls to index.html
   RewriteRule ^api(/|$) - [L]
@@ -18,7 +15,7 @@ Options -MultiViews
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]
 
-  # Fallback all React Router SPA routes (/products, /product/*, /affiliates, /saved, /account, etc.)
+  # Fallback all React Router SPA routes (/products, /product/*, /affiliates, /saved, /account, /portal/workspace, /admin, etc.)
   RewriteRule ^ index.html [L]
 </IfModule>
 
